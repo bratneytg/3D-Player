@@ -1,0 +1,4 @@
+Para compilar en Android Studio, descarga este archivo:
+https://huggingface.co/onnx-community/depth-anything-v2-small/resolve/main/onnx/model_quantized.onnx
+y guardalo en esta misma carpeta con el nombre exacto:  depth_model.onnx
+(GitHub Actions lo descarga solo; Android Studio no.)
