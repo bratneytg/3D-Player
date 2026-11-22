@@ -51,6 +51,7 @@ class PlayerActivity : Activity() {
     private lateinit var btnFormat: Button
     private lateinit var btnSwap: Button
     private lateinit var btnLens: Button
+    private lateinit var btnCurve: Button
     private lateinit var lblSep: TextView
     private lateinit var lblZoom: TextView
 
@@ -113,6 +114,7 @@ class PlayerActivity : Activity() {
         renderer.separation = prefs.getFloat("sep2", -0.08f)
         renderer.zoom = prefs.getFloat("zoom", 1f)
         renderer.lensLevel = prefs.getInt("lens", 2)
+        renderer.curved = prefs.getBoolean("curve", true)
         val ht = HeadTracker(this)
         tracker = ht
         renderer.headTracker = if (ht.available) ht else null
@@ -338,10 +340,17 @@ class PlayerActivity : Activity() {
             refreshTexts()
             glView.requestRender()
         }
+        btnCurve = Ui.button(this, "", false) {
+            renderer.curved = !renderer.curved
+            prefs.edit().putBoolean("curve", renderer.curved).apply()
+            refreshTexts()
+            glView.requestRender()
+        }
         sp.addView(btnMode, Ui.lp(-1, -2, bottom = gap))
         sp.addView(btnFormat, Ui.lp(-1, -2, bottom = gap))
         sp.addView(btnSwap, Ui.lp(-1, -2, bottom = gap))
         sp.addView(btnLens, Ui.lp(-1, -2, bottom = gap))
+        sp.addView(btnCurve, Ui.lp(-1, -2, bottom = gap))
 
         lblSep = Ui.text(this, "", 13f, Ui.MUT)
         sp.addView(lblSep)
@@ -443,6 +452,7 @@ class PlayerActivity : Activity() {
         val eff = effectiveLayout()
         btnFormat.text = if (layoutPref == Layout.AUTO) "Formato: Auto (" + eff.label + ")" else "Formato: " + layoutPref.label
         btnSwap.text = "Intercambiar ojos: " + (if (renderer.swapEyes) "sí" else "no")
+        btnCurve.text = "Pantalla VR: " + (if (renderer.curved) "curva (cóncava)" else "plana")
         btnLens.text = "Corrección de lente: " + lensNames[renderer.lensLevel.coerceIn(0, lensNames.size - 1)]
         lblSep.text = "Convergencia (negativo = imágenes más juntas): " + String.format("%+.0f", renderer.separation * 100f)
         lblZoom.text = "Zoom: " + String.format("%.0f%%", renderer.zoom * 100f)

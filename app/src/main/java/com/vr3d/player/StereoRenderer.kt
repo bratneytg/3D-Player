@@ -92,6 +92,8 @@ uniform mat3 uRot;
 uniform vec2 uTan;
 uniform vec2 uK;
 uniform vec2 uScr;
+uniform vec2 uCyl;
+uniform float uCurved;
 uniform vec4 uPan;
 uniform vec2 uMenu;
 uniform float uShowMenu;
@@ -114,8 +116,15 @@ void main() {
   vec3 ray = uRot * vec3(d * uTan, -1.0);
   vec3 col = vec3(0.015, 0.015, 0.03);
   if (ray.z < -0.0001) {
-    vec2 s = ray.xy / (-ray.z);
-    vec2 p = s / uScr;
+    vec2 p;
+    if (uCurved > 0.5) {
+      // pantalla cóncava: un trozo de cilindro alrededor de ti (cada punto está a la misma distancia)
+      float th = atan(ray.x, -ray.z);
+      float yy = ray.y / length(ray.xz);
+      p = vec2(th / uCyl.x, yy / uCyl.y);
+    } else {
+      p = (ray.xy / (-ray.z)) / uScr;
+    }
     if (abs(p.x) <= 1.0 && abs(p.y) <= 1.0) {
       col = video(vec2(p.x + uShift, p.y));
     }
@@ -145,6 +154,7 @@ void main() {
 """
         // Geometría de la escena (en unidades de tangente a distancia 1)
         private const val SCREEN_HALF_W = 1.05f
+        private const val CURVE_HALF_ANGLE = 0.90f // medio ángulo de la pantalla curva, en radianes (~52°)
         private const val TAN_V = 0.95f
         private val PANEL = floatArrayOf(0f, -0.80f, 0.62f, 0.155f) // cx, cy, medio ancho, medio alto
         private const val DWELL_NS = 1_200_000_000L
@@ -168,6 +178,8 @@ void main() {
     @Volatile var posMs: Long = 0L
     @Volatile var durMs: Long = 0L
     @Volatile var recenterRequested: Boolean = true
+    /** Pantalla cóncava (cilindro alrededor del espectador) en lugar de plana. */
+    @Volatile var curved: Boolean = true
     /** Se llama (desde el hilo de dibujo) cuando una mirada fija activa un control: (botón, fracción 0..1 si es la barra). */
     @Volatile var onGaze: ((Int, Float) -> Unit)? = null
 
@@ -182,6 +194,8 @@ void main() {
     private var sTan = 0
     private var sK = 0
     private var sScr = 0
+    private var sCyl = 0
+    private var sCurved = 0
     private var sPan = 0
     private var sMenu = 0
     private var sShowMenu = 0
@@ -261,6 +275,8 @@ void main() {
         sTan = GLES20.glGetUniformLocation(sceneProgram, "uTan")
         sK = GLES20.glGetUniformLocation(sceneProgram, "uK")
         sScr = GLES20.glGetUniformLocation(sceneProgram, "uScr")
+        sCyl = GLES20.glGetUniformLocation(sceneProgram, "uCyl")
+        sCurved = GLES20.glGetUniformLocation(sceneProgram, "uCurved")
         sPan = GLES20.glGetUniformLocation(sceneProgram, "uPan")
         sMenu = GLES20.glGetUniformLocation(sceneProgram, "uMenu")
         sShowMenu = GLES20.glGetUniformLocation(sceneProgram, "uShowMenu")
@@ -409,6 +425,9 @@ void main() {
         val rightIdx = if (swapEyes) 0 else 1
 
         GLES20.glUniform2f(sScr, hw, hh)
+        val thMax = (CURVE_HALF_ANGLE * z).coerceAtMost(1.45f)
+        GLES20.glUniform2f(sCyl, thMax, thMax / ea)
+        GLES20.glUniform1f(sCurved, if (curved) 1f else 0f)
         GLES20.glUniform4f(sPan, PANEL[0], PANEL[1], PANEL[2], PANEL[3])
         GLES20.glUniform2f(sMenu, Math.cos(menuYaw.toDouble()).toFloat(), Math.sin(menuYaw.toDouble()).toFloat())
         GLES20.glUniform1f(sShowMenu, if (menuVisible) 1f else 0f)
