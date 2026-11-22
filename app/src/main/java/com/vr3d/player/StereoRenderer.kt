@@ -79,7 +79,7 @@ void main() {
         // Fuerza de la corrección de lente para cada nivel (0 = apagada)
         val LENS_LEVELS = floatArrayOf(0f, 0.6f, 1f, 1.6f)
 
-        // Pantalla de cine virtual fija en el espacio + panel de controles + retícula de mirada.
+        // Pantalla de cine virtual fija en el espacio + menú de controles que se activa con la mirada.
         private const val FS_SCENE = """
 #extension GL_OES_EGL_image_external : require
 precision highp float;
@@ -93,10 +93,7 @@ uniform vec2 uTan;
 uniform vec2 uK;
 uniform vec2 uScr;
 uniform vec4 uPan;
-uniform vec2 uAspect;
 uniform float uShift;
-uniform float uDwell;
-uniform float uHover;
 
 vec3 video(vec2 p) {
   vec2 uv = vec2(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
@@ -124,33 +121,17 @@ void main() {
       col = c.rgb + (1.0 - c.a) * col;
     }
   }
-  // retícula en el centro de cada ojo
-  vec2 rp = vPos * uAspect;
-  float rr = length(rp);
-  float outer = 0.040 + 0.010 * uHover;
-  float inner = outer - 0.010;
-  if (rr < 0.006) {
-    col = vec3(1.0);
-  } else if (rr < outer && rr > inner) {
-    float ang = atan(rp.x, rp.y);
-    if (ang < 0.0) { ang += 6.2831853; }
-    float fr = ang / 6.2831853;
-    if (uDwell > 0.001 && fr < uDwell) {
-      col = vec3(0.13, 0.83, 0.93);
-    } else {
-      col = mix(col, vec3(1.0), 0.85);
-    }
-  }
   gl_FragColor = vec4(col, 1.0);
 }
 """
         // Geometría de la escena (en unidades de tangente a distancia 1)
-        private const val SCREEN_HALF_W = 0.62f
+        private const val SCREEN_HALF_W = 1.05f
         private const val TAN_V = 0.95f
-        private val PANEL = floatArrayOf(0f, -0.74f, 0.62f, 0.155f) // cx, cy, medio ancho, medio alto
-        private const val DWELL_NS = 1_300_000_000L
-        private const val REPEAT_NS = 900_000_000L
+        private val PANEL = floatArrayOf(0f, -0.80f, 0.62f, 0.155f) // cx, cy, medio ancho, medio alto
+        private const val DWELL_NS = 1_200_000_000L
+        private const val MENU_NS = 900_000_000L
         private const val SEEK_NS = 800_000_000L
+        private const val MENU_IDLE_NS = 5_000_000_000L
     }
 
     @Volatile var viewMode: Int = MODE_VR
@@ -183,10 +164,7 @@ void main() {
     private var sK = 0
     private var sScr = 0
     private var sPan = 0
-    private var sAspect = 0
     private var sShift = 0
-    private var sDwell = 0
-    private var sHover = 0
     private var panelTex = 0
     private val rawM = FloatArray(16)
     private val rot = FloatArray(9)
@@ -201,6 +179,11 @@ void main() {
     private var drawnPlaying = false
     private var drawnPosSec = -1L
     private var drawnU = -100f
+    private var drawnOpen = false
+    private var drawnDwell = 0f
+    private var lastDrawNs = 0L
+    private var menuOpen = false
+    private var menuActivity = 0L
 
     private var program = 0
     private var texId = 0
@@ -254,10 +237,7 @@ void main() {
         sK = GLES20.glGetUniformLocation(sceneProgram, "uK")
         sScr = GLES20.glGetUniformLocation(sceneProgram, "uScr")
         sPan = GLES20.glGetUniformLocation(sceneProgram, "uPan")
-        sAspect = GLES20.glGetUniformLocation(sceneProgram, "uAspect")
         sShift = GLES20.glGetUniformLocation(sceneProgram, "uShift")
-        sDwell = GLES20.glGetUniformLocation(sceneProgram, "uDwell")
-        sHover = GLES20.glGetUniformLocation(sceneProgram, "uHover")
 
         val pt = IntArray(1)
         GLES20.glGenTextures(1, pt, 0)
@@ -401,8 +381,6 @@ void main() {
         GLES20.glUniform2f(sScr, hw, hh)
         GLES20.glUniform4f(sPan, PANEL[0], PANEL[1], PANEL[2], PANEL[3])
         GLES20.glUniform2f(sK, 0.12f * lensK, 0.06f * lensK)
-        GLES20.glUniform1f(sDwell, dwellFrac)
-        GLES20.glUniform1f(sHover, if (hoverId != GazePanel.NONE) 1f else 0f)
 
         for (eye in 0..1) {
             val x = if (eye == 0) 0 else half
@@ -412,7 +390,6 @@ void main() {
             GLES20.glViewport(x, 0, w, viewH)
             GLES20.glUniform4f(sRect, r[0], r[1], r[2], r[3])
             GLES20.glUniform2f(sTan, TAN_V * va, TAN_V)
-            GLES20.glUniform2f(sAspect, va, 1f)
             GLES20.glUniform1f(sShift, if (eye == 0) separation else -separation)
             GLES20.glEnableVertexAttribArray(sAPos)
             quad.position(0)
@@ -421,7 +398,7 @@ void main() {
         }
     }
 
-    /** Calcula qué control está mirando el usuario, lleva la cuenta de la mirada fija y sube el panel a la GPU. */
+    /** Calcula qué control está mirando el usuario, lleva la cuenta de la mirada fija y sube el menú a la GPU. */
     private fun updateGaze() {
         // rayo del centro de la vista en el espacio de la escena = A * (0, 0, -1)
         val rx = -rot[6]
@@ -437,7 +414,7 @@ void main() {
             if (Math.abs(px) <= 1f && Math.abs(py) <= 1f) {
                 u = (px * 0.5f + 0.5f) * GazePanel.W
                 val v = (0.5f - py * 0.5f) * GazePanel.H
-                hit = panel.hit(u, v)
+                hit = panel.hit(u, v, menuOpen)
             }
         }
 
@@ -449,33 +426,56 @@ void main() {
             dwellFrac = 0f
         }
         hoverU = u
+        if (hit != GazePanel.NONE) menuActivity = now
+
         if (hit == GazePanel.NONE) {
             dwellFrac = 0f
+        } else if (!armed) {
+            dwellFrac = 0f
         } else {
-            val need = if (hit == GazePanel.SEEK) SEEK_NS else DWELL_NS
+            val need = when (hit) {
+                GazePanel.SEEK -> SEEK_NS
+                GazePanel.MENU -> MENU_NS
+                else -> DWELL_NS
+            }
             val since = now - maxOf(hoverStart, lastActivation)
-            if (armed) {
-                dwellFrac = (since.toFloat() / need.toFloat()).coerceIn(0f, 1f)
-                if (since >= need) {
-                    lastActivation = now
-                    val repeat = hit == GazePanel.BACK || hit == GazePanel.FWD
-                    armed = repeat
-                    dwellFrac = 0f
-                    val frac = if (hit == GazePanel.SEEK) panel.seekFraction(u) else 0f
-                    onGaze?.invoke(hit, frac)
-                }
-            } else {
+            dwellFrac = (since.toFloat() / need.toFloat()).coerceIn(0f, 1f)
+            if (since >= need) {
+                lastActivation = now
                 dwellFrac = 0f
+                // -10 s / +10 s se repiten mientras sigas mirándolos; el resto exige apartar la vista
+                armed = hit == GazePanel.BACK || hit == GazePanel.FWD
+                when (hit) {
+                    GazePanel.MENU -> {
+                        menuOpen = true
+                        menuActivity = now
+                    }
+                    GazePanel.CLOSE -> menuOpen = false
+                    else -> {
+                        val frac = if (hit == GazePanel.SEEK) panel.seekFraction(u) else 0f
+                        onGaze?.invoke(hit, frac)
+                    }
+                }
             }
         }
 
-        // Volver a dibujar el panel solo cuando algo cambia
+        // El menú se cierra solo tras 5 s sin mirarlo
+        if (menuOpen && now - menuActivity > MENU_IDLE_NS) {
+            menuOpen = false
+            hoverId = GazePanel.NONE
+            dwellFrac = 0f
+        }
+
+        // Volver a dibujar el menú solo cuando algo cambia (con un máximo de ~20 por segundo para el progreso)
         val posSec = posMs / 1000L
         val p = playing
-        val changed = hoverId != drawnHover || p != drawnPlaying || posSec != drawnPosSec ||
-            (hoverId == GazePanel.SEEK && Math.abs(hoverU - drawnU) > 6f)
+        var changed = hoverId != drawnHover || p != drawnPlaying || posSec != drawnPosSec || menuOpen != drawnOpen
+        if (!changed && now - lastDrawNs > 50_000_000L) {
+            if (Math.abs(dwellFrac - drawnDwell) > 0.01f) changed = true
+            if (hoverId == GazePanel.SEEK && Math.abs(hoverU - drawnU) > 6f) changed = true
+        }
         if (changed) {
-            panel.draw(hoverId, hoverU, p, posMs, durMs)
+            panel.draw(menuOpen, hoverId, hoverU, dwellFrac, p, posMs, durMs)
             GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, panelTex)
             GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, panel.bitmap, 0)
@@ -483,6 +483,9 @@ void main() {
             drawnPlaying = p
             drawnPosSec = posSec
             drawnU = hoverU
+            drawnOpen = menuOpen
+            drawnDwell = dwellFrac
+            lastDrawNs = now
         }
     }
 

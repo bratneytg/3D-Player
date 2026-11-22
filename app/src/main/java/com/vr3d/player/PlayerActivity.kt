@@ -64,9 +64,6 @@ class PlayerActivity : Activity() {
 
     private val prefs by lazy { getSharedPreferences("player", MODE_PRIVATE) }
     private var tracker: HeadTracker? = null
-    private lateinit var btnBg: Button
-    private var keepBg = true
-    private var serviceOn = false
 
     private val ticker = object : Runnable {
         override fun run() {
@@ -108,10 +105,9 @@ class PlayerActivity : Activity() {
         )
         renderer.viewMode = prefs.getInt("mode", StereoRenderer.MODE_VR)
         renderer.swapEyes = prefs.getBoolean("swap", false)
-        renderer.separation = prefs.getFloat("sep", 0f)
+        renderer.separation = prefs.getFloat("sep2", -0.08f)
         renderer.zoom = prefs.getFloat("zoom", 1f)
         renderer.lensLevel = prefs.getInt("lens", 2)
-        keepBg = prefs.getBoolean("bg", true)
         val ht = HeadTracker(this)
         tracker = ht
         renderer.headTracker = if (ht.available) ht else null
@@ -126,7 +122,6 @@ class PlayerActivity : Activity() {
         player.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 renderer.playing = isPlaying
-                if (serviceOn) PlaybackService.start(this@PlayerActivity, name, isPlaying)
             }
 
             override fun onVideoSizeChanged(videoSize: VideoSize) {
@@ -157,12 +152,6 @@ class PlayerActivity : Activity() {
         player.prepare()
         player.playWhenReady = true
 
-        PlaybackBridge.toggle = { runOnUiThread { togglePlay() } }
-        PlaybackBridge.close = { runOnUiThread { finish() } }
-        if (keepBg) {
-            PlaybackService.start(this, name, true)
-            serviceOn = true
-        }
         if (renderer.viewMode == StereoRenderer.MODE_VR && !ht.available) {
             Toast.makeText(this, "Tu móvil no tiene giroscopio: el modo VR no podrá seguir tu cabeza.", Toast.LENGTH_LONG).show()
         }
@@ -332,34 +321,21 @@ class PlayerActivity : Activity() {
             refreshTexts()
             glView.requestRender()
         }
-        btnBg = Ui.button(this, "", false) {
-            keepBg = !keepBg
-            prefs.edit().putBoolean("bg", keepBg).apply()
-            if (keepBg) {
-                PlaybackService.start(this, name, player.isPlaying)
-                serviceOn = true
-            } else {
-                PlaybackService.stop(this)
-                serviceOn = false
-            }
-            refreshTexts()
-        }
         sp.addView(btnMode, Ui.lp(-1, -2, bottom = gap))
         sp.addView(btnFormat, Ui.lp(-1, -2, bottom = gap))
         sp.addView(btnSwap, Ui.lp(-1, -2, bottom = gap))
         sp.addView(btnLens, Ui.lp(-1, -2, bottom = gap))
-        sp.addView(btnBg, Ui.lp(-1, -2, bottom = gap))
 
         lblSep = Ui.text(this, "", 13f, Ui.MUT)
         sp.addView(lblSep)
         val sepBar = SeekBar(this)
         sepBar.max = 200
-        sepBar.progress = ((renderer.separation / 0.001f) + 100f).toInt().coerceIn(0, 200)
+        sepBar.progress = ((renderer.separation / 0.0025f) + 100f).toInt().coerceIn(0, 200)
         sepBar.progressTintList = android.content.res.ColorStateList.valueOf(Ui.ACC)
         sepBar.thumbTintList = android.content.res.ColorStateList.valueOf(Ui.ACC)
         sepBar.setOnSeekBarChangeListener(simpleSeek { p ->
-            renderer.separation = (p - 100) * 0.001f
-            prefs.edit().putFloat("sep", renderer.separation).apply()
+            renderer.separation = (p - 100) * 0.0025f
+            prefs.edit().putFloat("sep2", renderer.separation).apply()
             refreshTexts()
             glView.requestRender()
         })
@@ -382,9 +358,9 @@ class PlayerActivity : Activity() {
 
         val hint = Ui.text(
             this,
-            "En modo VR mira hacia abajo para ver los controles y mantén la mirada fija sobre uno " +
-                "(el círculo se llena) para activarlo. Tocar la pantalla (o el botón del visor) pausa o reanuda. " +
-                "Mantén pulsado para ver este menú.",
+            "En modo VR mira hacia abajo hasta el botón «Menú» y mantén la mirada fija para abrirlo; " +
+                "lo mismo para cada control (se rellena una barrita). Se cierra solo a los 5 s o con ✕. " +
+                "Tocar la pantalla (o el botón del visor) pausa o reanuda. Mantén pulsado para ver este menú.",
             12f, Ui.MUT
         )
         sp.addView(hint, Ui.lp(-1, -2, top = gap))
@@ -451,8 +427,7 @@ class PlayerActivity : Activity() {
         btnFormat.text = if (layoutPref == Layout.AUTO) "Formato: Auto (" + eff.label + ")" else "Formato: " + layoutPref.label
         btnSwap.text = "Intercambiar ojos: " + (if (renderer.swapEyes) "sí" else "no")
         btnLens.text = "Corrección de lente: " + lensNames[renderer.lensLevel.coerceIn(0, lensNames.size - 1)]
-        btnBg.text = "Seguir en segundo plano: " + (if (keepBg) "sí" else "no")
-        lblSep.text = "Separación de imagen: " + String.format("%+.0f", renderer.separation * 1000f)
+        lblSep.text = "Convergencia (negativo = imágenes más juntas): " + String.format("%+.0f", renderer.separation * 100f)
         lblZoom.text = "Zoom: " + String.format("%.0f%%", renderer.zoom * 100f)
     }
 
@@ -493,10 +468,6 @@ class PlayerActivity : Activity() {
             renderer.recenterRequested = true
             tracker?.start()
         }
-        if (::player.isInitialized) {
-            player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
-                .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, false).build()
-        }
         handler.post(ticker)
     }
 
@@ -511,23 +482,13 @@ class PlayerActivity : Activity() {
         tracker?.stop()
         if (::player.isInitialized) {
             Library.setPosition(this, uriString, player.currentPosition)
-            if (keepBg) {
-                // La imagen se detiene pero el audio sigue sonando con la pantalla apagada o en otra app.
-                player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
-                    .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, true).build()
-                player.clearVideoSurface()
-            } else {
-                player.pause()
-            }
+            player.pause()
         }
         if (::glView.isInitialized) glView.onPause()
         super.onPause()
     }
 
     override fun onDestroy() {
-        PlaybackBridge.toggle = null
-        PlaybackBridge.close = null
-        if (serviceOn) PlaybackService.stop(this)
         if (::player.isInitialized) {
             Library.setPosition(this, uriString, player.currentPosition)
             player.release()

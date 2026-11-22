@@ -8,8 +8,9 @@ import android.graphics.Path
 import android.graphics.RectF
 
 /**
- * Panel de controles para el modo VR. Se dibuja en un bitmap que el renderizador coloca en el espacio 3D;
- * se activa mirándolo fijamente (sin tocar la pantalla).
+ * Menú del modo VR. Se dibuja en un bitmap que el renderizador coloca en el espacio 3D.
+ * Cerrado: solo un botón pequeño "Menú". Abierto: barra de progreso y los controles.
+ * Se activa mirando el elemento unos instantes (sin tocar la pantalla).
  */
 class GazePanel {
     companion object {
@@ -21,16 +22,24 @@ class GazePanel {
         const val FWD = 3
         const val CENTER = 4
         const val EXIT = 5
-        const val SEEK = 6
+        const val CLOSE = 6
+        const val SEEK = 7
+        const val MENU = 8
 
         private const val BTN_Y0 = 112f
         private const val BTN_Y1 = 236f
-        private const val BTN_W = 176f
-        private const val BTN_GAP = 16f
-        private const val BTN_X0 = 40f
+        private const val BTN_W = 148f
+        private const val BTN_GAP = 12f
+        private const val BTN_X0 = 38f
         private const val BAR_X0 = 170f
         private const val BAR_X1 = 854f
         private const val BAR_Y = 52f
+
+        // botón de menú (cerrado)
+        private const val M_X0 = 362f
+        private const val M_X1 = 662f
+        private const val M_Y0 = 78f
+        private const val M_Y1 = 178f
     }
 
     val bitmap: Bitmap = Bitmap.createBitmap(W, H, Bitmap.Config.ARGB_8888)
@@ -41,10 +50,15 @@ class GazePanel {
 
     private fun btnX(i: Int): Float = BTN_X0 + i * (BTN_W + BTN_GAP)
 
-    /** u, v en píxeles del bitmap. Devuelve el botón (o la barra de progreso) bajo ese punto. */
-    fun hit(u: Float, v: Float): Int {
+    /** u, v en píxeles del bitmap. Devuelve el elemento bajo ese punto según el menú esté abierto o no. */
+    fun hit(u: Float, v: Float, open: Boolean): Int {
+        if (!open) {
+            // zona de puntería algo más grande que el dibujo para que sea fácil acertar
+            if (u >= M_X0 - 60f && u <= M_X1 + 60f && v >= M_Y0 - 50f && v <= M_Y1 + 50f) return MENU
+            return NONE
+        }
         if (v in BTN_Y0..BTN_Y1) {
-            for (i in 0 until 5) {
+            for (i in 0 until 6) {
                 val x0 = btnX(i)
                 if (u >= x0 && u <= x0 + BTN_W) return i + 1
             }
@@ -55,12 +69,43 @@ class GazePanel {
 
     fun seekFraction(u: Float): Float = ((u - BAR_X0) / (BAR_X1 - BAR_X0)).coerceIn(0f, 1f)
 
-    fun draw(hover: Int, hoverU: Float, playing: Boolean, posMs: Long, durMs: Long) {
+    fun draw(open: Boolean, hover: Int, hoverU: Float, dwell: Float, playing: Boolean, posMs: Long, durMs: Long) {
         bitmap.eraseColor(Color.TRANSPARENT)
+        if (open) drawOpen(hover, hoverU, dwell, playing, posMs, durMs) else drawClosed(hover, dwell)
+    }
 
+    private fun drawClosed(hover: Int, dwell: Float) {
+        val hot = hover == MENU
+        paint.style = Paint.Style.FILL
+        paint.color = if (hot) Color.parseColor("#E61E1E2E") else Color.parseColor("#9915151F")
+        rect.set(M_X0, M_Y0, M_X1, M_Y1)
+        canvas.drawRoundRect(rect, 50f, 50f, paint)
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 3f
+        paint.color = if (hot) Color.parseColor("#FF22D3EE") else Color.parseColor("#88FFFFFF")
+        canvas.drawRoundRect(rect, 50f, 50f, paint)
+        if (hot && dwell > 0f) {
+            paint.style = Paint.Style.FILL
+            paint.color = Color.parseColor("#FF22D3EE")
+            rect.set(M_X0 + 30f, M_Y1 - 22f, M_X0 + 30f + (M_X1 - M_X0 - 60f) * dwell, M_Y1 - 12f)
+            canvas.drawRoundRect(rect, 5f, 5f, paint)
+        }
+        // icono de menú (tres rayas) y texto
+        paint.style = Paint.Style.FILL
+        paint.color = Color.WHITE
+        for (k in 0 until 3) {
+            rect.set(M_X0 + 40f, M_Y0 + 26f + k * 18f, M_X0 + 82f, M_Y0 + 34f + k * 18f)
+            canvas.drawRoundRect(rect, 4f, 4f, paint)
+        }
+        paint.textSize = 44f
+        paint.textAlign = Paint.Align.LEFT
+        canvas.drawText("Menú", M_X0 + 108f, M_Y0 + 62f, paint)
+    }
+
+    private fun drawOpen(hover: Int, hoverU: Float, dwell: Float, playing: Boolean, posMs: Long, durMs: Long) {
         // fondo
         paint.style = Paint.Style.FILL
-        paint.color = Color.parseColor("#FF101018")
+        paint.color = Color.parseColor("#F2101018")
         rect.set(0f, 0f, W.toFloat(), H.toFloat())
         canvas.drawRoundRect(rect, 36f, 36f, paint)
         paint.style = Paint.Style.STROKE
@@ -92,11 +137,18 @@ class GazePanel {
         if (hover == SEEK) {
             val hx = hoverU.coerceIn(BAR_X0, BAR_X1)
             paint.color = Color.parseColor("#FF22D3EE")
-            canvas.drawCircle(hx, BAR_Y, 13f, paint)
+            canvas.drawCircle(hx, BAR_Y, 15f, paint)
+            if (dwell > 0f) {
+                paint.style = Paint.Style.STROKE
+                paint.strokeWidth = 6f
+                rect.set(hx - 26f, BAR_Y - 26f, hx + 26f, BAR_Y + 26f)
+                canvas.drawArc(rect, -90f, 360f * dwell, false, paint)
+                paint.style = Paint.Style.FILL
+            }
         }
 
         // botones
-        for (i in 0 until 5) {
+        for (i in 0 until 6) {
             val id = i + 1
             val x0 = btnX(i)
             val hot = hover == id
@@ -104,31 +156,38 @@ class GazePanel {
             paint.color = if (hot) (if (id == EXIT) Color.parseColor("#FFB4343C") else Color.parseColor("#FF8B5CF6"))
             else Color.parseColor("#FF2A2A3E")
             rect.set(x0, BTN_Y0, x0 + BTN_W, BTN_Y1)
-            canvas.drawRoundRect(rect, 28f, 28f, paint)
+            canvas.drawRoundRect(rect, 26f, 26f, paint)
 
             val cx = x0 + BTN_W / 2f
-            val cy = (BTN_Y0 + BTN_Y1) / 2f
+            val cy = (BTN_Y0 + BTN_Y1) / 2f - 6f
             paint.color = Color.WHITE
             when (id) {
-                BACK -> label("-10 s", cx, cy, 46f)
-                FWD -> label("+10 s", cx, cy, 46f)
-                CENTER -> label("Centrar", cx, cy, 40f)
-                EXIT -> label("Salir", cx, cy, 44f)
+                BACK -> label("-10 s", cx, cy, 40f)
+                FWD -> label("+10 s", cx, cy, 40f)
+                CENTER -> label("Centrar", cx, cy, 33f)
+                EXIT -> label("Salir", cx, cy, 38f)
+                CLOSE -> label("✕", cx, cy, 52f)
                 PLAY -> {
                     if (playing) {
-                        rect.set(cx - 26f, cy - 30f, cx - 8f, cy + 30f)
+                        rect.set(cx - 24f, cy - 28f, cx - 7f, cy + 28f)
                         canvas.drawRoundRect(rect, 4f, 4f, paint)
-                        rect.set(cx + 8f, cy - 30f, cx + 26f, cy + 30f)
+                        rect.set(cx + 7f, cy - 28f, cx + 24f, cy + 28f)
                         canvas.drawRoundRect(rect, 4f, 4f, paint)
                     } else {
                         path.reset()
-                        path.moveTo(cx - 20f, cy - 34f)
-                        path.lineTo(cx + 34f, cy)
-                        path.lineTo(cx - 20f, cy + 34f)
+                        path.moveTo(cx - 18f, cy - 32f)
+                        path.lineTo(cx + 32f, cy)
+                        path.lineTo(cx - 18f, cy + 32f)
                         path.close()
                         canvas.drawPath(path, paint)
                     }
                 }
+            }
+            if (hot && dwell > 0f) {
+                paint.style = Paint.Style.FILL
+                paint.color = Color.parseColor("#FF22D3EE")
+                rect.set(x0 + 14f, BTN_Y1 - 20f, x0 + 14f + (BTN_W - 28f) * dwell, BTN_Y1 - 10f)
+                canvas.drawRoundRect(rect, 5f, 5f, paint)
             }
         }
     }
