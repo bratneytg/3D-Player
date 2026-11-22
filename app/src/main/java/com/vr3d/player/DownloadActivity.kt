@@ -58,9 +58,10 @@ class DownloadActivity : Activity() {
         col.addView(
             Ui.text(
                 this,
-                "Pega el enlace directo a un video (.mp4, .mkv, .webm…) o a un stream .m3u8. " +
+                "Pega el enlace de una página web con un video, o el enlace directo (.mp4, .mkv, .webm… o .m3u8). " +
+                    "La app busca los videos de la página y te deja elegir cuál y con qué calidad. " +
                     "Se descarga el archivo original, sin perder calidad. Solo descarga videos que tengas derecho a guardar. " +
-                    "No funciona con páginas como YouTube.",
+                    "Los videos protegidos (YouTube, plataformas de pago…) no se pueden descargar.",
                 13f, Ui.MUT
             ),
             Ui.lp(-1, -2, top = Ui.dp(this, 4), bottom = Ui.dp(this, 16))
@@ -169,7 +170,7 @@ class DownloadActivity : Activity() {
         optionsBox.removeAllViews()
         optionButtons.clear()
         tvInfo.setTextColor(Ui.MUT)
-        tvInfo.text = "Analizando enlace…"
+        tvInfo.text = "Analizando enlace y buscando videos…"
         Thread {
             try {
                 val res = VideoDownloader(this).analyze(url)

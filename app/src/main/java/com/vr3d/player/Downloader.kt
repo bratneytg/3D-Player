@@ -19,7 +19,8 @@ class DlOption(
     val audioUrl: String?,
     val hls: Boolean,
     val fileName: String,
-    val sizeBytes: Long
+    val sizeBytes: Long,
+    val referer: String? = null
 )
 
 class DlAnalysis(val options: List<DlOption>, val note: String)
@@ -31,6 +32,7 @@ class DlAnalysis(val options: List<DlOption>, val note: String)
 class VideoDownloader(private val ctx: Context) {
     @Volatile
     var cancelled = false
+    private var referer: String? = null
 
     companion object {
         private const val UA = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Mobile Safari/537.36"
@@ -52,6 +54,7 @@ class VideoDownloader(private val ctx: Context) {
             conn.requestMethod = method
             conn.setRequestProperty("User-Agent", UA)
             conn.setRequestProperty("Accept", "*/*")
+            referer?.let { conn.setRequestProperty("Referer", it) }
             val code = conn.responseCode
             if (code in 300..399) {
                 val loc = conn.getHeaderField("Location") ?: throw IllegalStateException("Redirección sin destino")
@@ -85,6 +88,11 @@ class VideoDownloader(private val ctx: Context) {
         if (!(url.startsWith("http://") || url.startsWith("https://"))) {
             throw IllegalArgumentException("El enlace debe empezar por http:// o https://")
         }
+        referer = null
+        return analyzeUrl(url, true)
+    }
+
+    private fun analyzeUrl(url: String, allowPage: Boolean): DlAnalysis {
         val path = url.substringBefore('?').substringBefore('#')
         val ext = path.substringAfterLast('.', "").lowercase()
         val baseName = cleanName(
@@ -103,10 +111,15 @@ class VideoDownloader(private val ctx: Context) {
             }
             val looksVideo = type.startsWith("video/") || ext in VIDEO_EXT ||
                 ((type.contains("octet-stream")) && ext in VIDEO_EXT)
+            if (type.contains("html") && allowPage) {
+                val body = readLimited(conn, 4_000_000)
+                conn.disconnect()
+                return analyzePage(url, String(body, Charsets.UTF_8))
+            }
             if (type.startsWith("text/") || type.contains("html") || !looksVideo) {
                 throw IllegalArgumentException(
-                    "Ese enlace es una página web, no un archivo de video. Pega el enlace directo al archivo " +
-                        "(termina en .mp4, .mkv, .webm…) o a una lista .m3u8. Páginas como YouTube no están admitidas."
+                    "Ese enlace no es un archivo de video. Pega el enlace de una página con el video, " +
+                        "el enlace directo al archivo (.mp4, .mkv, .webm…) o una lista .m3u8."
                 )
             }
             val fileExt = if (ext in VIDEO_EXT) ext else when {
@@ -116,11 +129,56 @@ class VideoDownloader(private val ctx: Context) {
                 else -> "mp4"
             }
             val sizeTxt = if (len > 0) " · " + fmtSize(len) else ""
-            val opt = DlOption("Original, sin pérdida de calidad" + sizeTxt, url, null, false, "$baseName.$fileExt", len)
+            val opt = DlOption("Original, sin pérdida de calidad" + sizeTxt, url, null, false, "$baseName.$fileExt", len, referer)
             return DlAnalysis(listOf(opt), "Es un archivo de video directo: solo hay una calidad (la original). Se descarga tal cual, sin recomprimir.")
         } finally {
             conn.disconnect()
         }
+    }
+
+    private fun readLimited(conn: HttpURLConnection, max: Int): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        val buf = ByteArray(32 * 1024)
+        conn.inputStream.use { input ->
+            while (out.size() < max) {
+                val n = input.read(buf, 0, minOf(buf.size, max - out.size()))
+                if (n < 0) break
+                out.write(buf, 0, n)
+            }
+        }
+        return out.toByteArray()
+    }
+
+    /** Busca en el código de una página web los enlaces a video y los analiza uno por uno. */
+    private fun analyzePage(pageUrl: String, html: String): DlAnalysis {
+        val found = PageScan.findVideoLinks(pageUrl, html)
+        if (found.isEmpty()) {
+            throw IllegalArgumentException(
+                "No encontré ningún video descargable en esa página. Puede que el reproductor lo cargue de forma " +
+                    "protegida o con scripts; en ese caso necesitas el enlace directo del archivo."
+            )
+        }
+        referer = pageUrl // muchas webs solo sirven el video si se pide desde su propia página
+        val all = ArrayList<DlOption>()
+        var n = 0
+        for (u in found) {
+            if (cancelled) break
+            try {
+                val a = analyzeUrl(u, false)
+                n++
+                for (o in a.options) {
+                    all.add(DlOption("Video " + n + " · " + o.label, o.url, o.audioUrl, o.hls, o.fileName, o.sizeBytes, pageUrl))
+                }
+            } catch (e: Exception) {
+                // este enlace no era un video descargable; se ignora
+            }
+        }
+        if (all.isEmpty()) {
+            throw IllegalArgumentException(
+                "Encontré enlaces en la página pero ninguno se pudo descargar (pueden estar protegidos o cifrados)."
+            )
+        }
+        return DlAnalysis(all, "Encontré " + n + (if (n == 1) " video" else " videos") + " en la página. Elige cuál y con qué calidad.")
     }
 
     private fun analyzeHls(url: String, baseName: String): DlAnalysis {
@@ -129,7 +187,7 @@ class VideoDownloader(private val ctx: Context) {
         if (!HlsParser.isMaster(text)) {
             val m = HlsParser.parseMedia(text, url)
             checkMedia(m)
-            val opt = DlOption("Única calidad disponible" + durTxt(m.durationSec), url, null, true, "$baseName.mp4", 0L)
+            val opt = DlOption("Única calidad disponible" + durTxt(m.durationSec), url, null, true, "$baseName.mp4", 0L, referer)
             return DlAnalysis(listOf(opt), "Stream HLS: se descargan todos los trozos y se unen en un solo archivo.")
         }
         val master = HlsParser.parseMaster(text, url)
@@ -140,7 +198,7 @@ class VideoDownloader(private val ctx: Context) {
             val rate = String.format("%.1f Mbps", v.bandwidth / 1_000_000.0)
             val tag = if (idx == 0) " · la mejor" else ""
             val audio = v.audioGroup?.let { master.audioGroups[it] }
-            list.add(DlOption(res + " · " + rate + tag, v.url, audio, true, baseName + "_" + (if (v.height > 0) v.height.toString() + "p" else "q" + (idx + 1)) + ".mp4", 0L))
+            list.add(DlOption(res + " · " + rate + tag, v.url, audio, true, baseName + "_" + (if (v.height > 0) v.height.toString() + "p" else "q" + (idx + 1)) + ".mp4", 0L, referer))
         }
         return DlAnalysis(list, "Stream HLS con " + list.size + " calidades. Elige una; las más bajas ocupan menos espacio y datos.")
     }
@@ -164,6 +222,7 @@ class VideoDownloader(private val ctx: Context) {
 
     /** Descarga la opción elegida a un archivo temporal y devuelve (archivo, nombre final). */
     fun download(opt: DlOption, progress: (Float, String) -> Unit): Pair<File, String> {
+        referer = opt.referer
         return if (opt.hls) downloadHls(opt, progress) else downloadDirect(opt, progress)
     }
 

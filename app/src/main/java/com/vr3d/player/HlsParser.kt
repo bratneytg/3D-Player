@@ -95,3 +95,23 @@ object HlsParser {
         return Media(segs, init, enc, !endList, dur)
     }
 }
+
+/** Busca enlaces a video dentro del código de una página web. */
+object PageScan {
+    fun findVideoLinks(pageUrl: String, html: String): List<String> {
+        val text = html
+            .replace("\\/", "/")
+            .replace("\\u002F", "/", ignoreCase = true)
+            .replace("\\u0026", "&", ignoreCase = true)
+            .replace("&amp;", "&")
+        val exts = "mp4|m3u8|webm|mkv|mov|m4v"
+        val out = LinkedHashSet<String>()
+        // enlaces absolutos en cualquier parte del código
+        Regex("https?://[^\\s\"'<>\\\\()]+?\\.(?:" + exts + ")(?:\\?[^\\s\"'<>\\\\()]*)?", RegexOption.IGNORE_CASE)
+            .findAll(text).forEach { out.add(it.value) }
+        // atributos con rutas relativas o que empiezan por //
+        Regex("(?:src|href|data-src|content|file|source|url|contentUrl)\\s*[=:]\\s*[\"']([^\"']+\\.(?:" + exts + ")(?:\\?[^\"']*)?)[\"']", RegexOption.IGNORE_CASE)
+            .findAll(text).forEach { out.add(HlsParser.resolve(pageUrl, it.groupValues[1])) }
+        return out.filter { it.startsWith("http") }.take(8)
+    }
+}

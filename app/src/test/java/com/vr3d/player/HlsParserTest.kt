@@ -64,3 +64,30 @@ seg2.m4s
         assertFalse(HlsParser.isMaster("#EXTM3U\n#EXTINF:6,\ns.ts\n"))
     }
 }
+
+class PageScanTest {
+    @Test
+    fun findsVideoTagsMetaAndEscapedJson() {
+        val html = """
+<html><head>
+<meta property="og:video" content="https://cdn.site.com/v/clip.mp4?token=a&amp;b=2">
+</head><body>
+<video src="/media/main.webm" poster="/p.jpg"></video>
+<source src="//static.site.com/hls/index.m3u8" type="application/x-mpegURL">
+<script>var cfg = {"file":"https:\/\/cdn.site.com\/other\/movie.mkv"};</script>
+<img src="/p.jpg">
+</body></html>
+"""
+        val l = PageScan.findVideoLinks("https://site.com/watch/1", html)
+        assertTrue(l.contains("https://cdn.site.com/v/clip.mp4?token=a&b=2"))
+        assertTrue(l.contains("https://site.com/media/main.webm"))
+        assertTrue(l.contains("https://static.site.com/hls/index.m3u8"))
+        assertTrue(l.contains("https://cdn.site.com/other/movie.mkv"))
+        assertFalse(l.any { it.endsWith(".jpg") })
+    }
+
+    @Test
+    fun emptyWhenNoVideo() {
+        assertTrue(PageScan.findVideoLinks("https://a.com/", "<html><p>hola</p></html>").isEmpty())
+    }
+}

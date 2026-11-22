@@ -43,6 +43,7 @@ class DownloadService : Service() {
             i.putExtra("audio", opt.audioUrl)
             i.putExtra("hls", opt.hls)
             i.putExtra("file", opt.fileName)
+            i.putExtra("ref", opt.referer)
             if (Build.VERSION.SDK_INT >= 26) ctx.startForegroundService(i) else ctx.startService(i)
         }
 
@@ -73,7 +74,8 @@ class DownloadService : Service() {
             intent.getStringExtra("audio"),
             intent.getBooleanExtra("hls", false),
             intent.getStringExtra("file") ?: "video.mp4",
-            0L
+            0L,
+            intent.getStringExtra("ref")
         )
 
         DownloadState.running = true
