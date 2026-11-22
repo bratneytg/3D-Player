@@ -34,7 +34,7 @@ class ConvertActivity : Activity() {
 
     private var picked: Uri? = null
     private var pickedName = "video"
-    private var highQuality = false
+    private var quality = 0
     private var running = false
     private val handler = Handler(Looper.getMainLooper())
     private var seenFinished = ConvertState.finishedCount
@@ -83,7 +83,7 @@ class ConvertActivity : Activity() {
         card.addView(seekStrength, Ui.lp(-1, -2, bottom = Ui.dp(this, 10)))
 
         btnQuality = Ui.button(this, "", false) {
-            highQuality = !highQuality
+            quality = (quality + 1) % 3
             refreshTexts()
         }
         card.addView(btnQuality, Ui.lp(-1, -2, bottom = Ui.dp(this, 14)))
@@ -124,7 +124,7 @@ class ConvertActivity : Activity() {
                 this,
                 "La conversión sigue en segundo plano: puedes apagar la pantalla o usar otras apps " +
                     "(verás el progreso en la notificación). " +
-                    "Rápido (480p) es lo más ágil; Normal (720p) tarda varias veces más. " +
+                    "Rápido (480p) es lo más ágil; Normal (720p) tarda varias veces más y Alta (1080p) bastante más aún; mejor con el móvil cargando. " +
                     "Se usa mucha batería: conviene tener el móvil cargando.",
                 12f, Ui.MUT
             ),
@@ -144,7 +144,11 @@ class ConvertActivity : Activity() {
         val s = strength()
         val label = if (s < 0.8f) "Suave" else if (s < 1.3f) "Normal" else if (s < 1.7f) "Fuerte" else "Extremo"
         tvStrength.text = "Intensidad del 3D: " + label + " · " + String.format("%.1f", s)
-        btnQuality.text = if (highQuality) "Calidad: Normal (720p) · más lento" else "Calidad: Rápido (480p)"
+        btnQuality.text = when (quality) {
+            2 -> "Calidad: Alta (1080p) · mucho más lento"
+            1 -> "Calidad: Normal (720p) · más lento"
+            else -> "Calidad: Rápido (480p)"
+        }
     }
 
     @Suppress("DEPRECATION")
@@ -198,7 +202,7 @@ class ConvertActivity : Activity() {
     private fun start() {
         val uri = picked ?: return
         if (ConvertState.running) return
-        ConvertService.start(this, uri, pickedName, strength(), highQuality)
+        ConvertService.start(this, uri, pickedName, strength(), quality)
         // El estado real lo marca el servicio; mientras arranca se muestra "Preparando…".
         seenFinished = ConvertState.finishedCount
         startedAt = System.currentTimeMillis()

@@ -153,7 +153,7 @@ class VideoConverter(private val ctx: Context) {
         src: Uri,
         out: File,
         strength: Float,
-        highQuality: Boolean,
+        quality: Int,
         progress: (Float, String) -> Unit
     ): ConvResult {
         val t0 = System.currentTimeMillis()
@@ -186,15 +186,15 @@ class VideoConverter(private val ctx: Context) {
 
             val dispW = if (rotation % 180 == 0) srcW else srcH
             val dispH = if (rotation % 180 == 0) srcH else srcW
-            val shortSide = if (highQuality) 720 else 480
+            val shortSide = when (quality) { 2 -> 1080; 1 -> 720; else -> 480 }
             val scale = min(1f, shortSide.toFloat() / min(dispW, dispH).toFloat())
             val w = max(16, ((dispW * scale / 16f).roundToInt()) * 16)
             val h = max(16, ((dispH * scale / 16f).roundToInt()) * 16)
             val w2 = 2 * w
             val bt709Out = h >= 720
             val bt709In = dispH >= 720
-            val stride = if (highQuality) 2 else 3
-            val depthRes = if (highQuality) 322 else 224
+            val stride = if (quality >= 1) 2 else 3
+            val depthRes = when (quality) { 2 -> 392; 1 -> 322; else -> 224 }
             val halfPx = strength * w * DISPARITY_FRAC / 2f
             val dilatePx = halfPx * max(CONVERGENCE, 1f - CONVERGENCE)
 
@@ -205,13 +205,18 @@ class VideoConverter(private val ctx: Context) {
             // ---- salida: codificador + muxer
             val encFmt = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w2, h)
             encFmt.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible)
-            val bitrate = (w2.toLong() * h * fps * 0.12f).toLong().coerceIn(2_000_000L, 20_000_000L).toInt()
+            val bitrate = (w2.toLong() * h * fps * 0.12f).toLong().coerceIn(2_000_000L, if (quality >= 2) 32_000_000L else 20_000_000L).toInt()
             encFmt.setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
             encFmt.setInteger(MediaFormat.KEY_FRAME_RATE, fps.roundToInt())
             encFmt.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
             val encoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
-            encoder.configure(encFmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-            encoder.start()
+            try {
+                encoder.configure(encFmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                encoder.start()
+            } catch (e: Exception) {
+                encoder.release()
+                throw IllegalStateException("Tu móvil no puede codificar video de " + w2 + "×" + h + ". Prueba una calidad menor.")
+            }
             enc = encoder
 
             val muxer = MediaMuxer(out.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)

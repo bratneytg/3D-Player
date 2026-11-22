@@ -45,14 +45,14 @@ class ConvertService : Service() {
         private const val A_START = "com.vr3d.player.CONVERT_START"
         private const val A_CANCEL = "com.vr3d.player.CONVERT_CANCEL"
 
-        fun start(ctx: Context, uri: Uri, name: String, strength: Float, highQuality: Boolean) {
+        fun start(ctx: Context, uri: Uri, name: String, strength: Float, quality: Int) {
             val i = Intent(ctx, ConvertService::class.java)
             i.action = A_START
             i.data = uri
             i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             i.putExtra("name", name)
             i.putExtra("strength", strength)
-            i.putExtra("hq", highQuality)
+            i.putExtra("q", quality)
             if (Build.VERSION.SDK_INT >= 26) ctx.startForegroundService(i) else ctx.startService(i)
         }
 
@@ -81,7 +81,7 @@ class ConvertService : Service() {
 
         val name = intent.getStringExtra("name") ?: "video"
         val strength = intent.getFloatExtra("strength", 1f)
-        val hq = intent.getBooleanExtra("hq", false)
+        val hq = intent.getIntExtra("q", 0)
 
         ConvertState.running = true
         ConvertState.progress = 0f
