@@ -115,14 +115,15 @@ void main() {
   vec2 d = q * (1.0 + uK.x * r2 + uK.y * r2 * r2);
   vec3 ray = uRot * vec3(d * uTan, -1.0);
   vec3 col = vec3(0.015, 0.015, 0.03);
-  if (ray.z < -0.0001) {
-    vec2 p;
+  {
+    vec2 p = vec2(2.0);
     if (uCurved > 0.5) {
-      // pantalla cóncava: un trozo de cilindro alrededor de ti (cada punto está a la misma distancia)
+      // pantalla cóncava: un trozo de cilindro alrededor de ti (cada punto está a la misma distancia).
+      // Con zoom alto la pantalla se abre más y te envuelve (hasta rodearte por los lados).
       float th = atan(ray.x, -ray.z);
-      float yy = ray.y / length(ray.xz);
+      float yy = ray.y / max(length(ray.xz), 0.0001);
       p = vec2(th / uCyl.x, yy / uCyl.y);
-    } else {
+    } else if (ray.z < -0.0001) {
       p = (ray.xy / (-ray.z)) / uScr;
     }
     if (abs(p.x) <= 1.0 && abs(p.y) <= 1.0) {
@@ -425,7 +426,7 @@ void main() {
         val rightIdx = if (swapEyes) 0 else 1
 
         GLES20.glUniform2f(sScr, hw, hh)
-        val thMax = (CURVE_HALF_ANGLE * z).coerceAtMost(1.45f)
+        val thMax = (CURVE_HALF_ANGLE * z).coerceAtMost(2.4f)
         GLES20.glUniform2f(sCyl, thMax, thMax / ea)
         GLES20.glUniform1f(sCurved, if (curved) 1f else 0f)
         GLES20.glUniform4f(sPan, PANEL[0], PANEL[1], PANEL[2], PANEL[3])

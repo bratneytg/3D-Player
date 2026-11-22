@@ -370,8 +370,8 @@ class PlayerActivity : Activity() {
         lblZoom = Ui.text(this, "", 13f, Ui.MUT)
         sp.addView(lblZoom)
         val zoomBar = SeekBar(this)
-        zoomBar.max = 100
-        zoomBar.progress = ((renderer.zoom - 0.5f) * 100f).toInt().coerceIn(0, 100)
+        zoomBar.max = 200
+        zoomBar.progress = ((renderer.zoom - 0.5f) * 100f).toInt().coerceIn(0, 200)
         zoomBar.progressTintList = android.content.res.ColorStateList.valueOf(Ui.ACC)
         zoomBar.thumbTintList = android.content.res.ColorStateList.valueOf(Ui.ACC)
         zoomBar.setOnSeekBarChangeListener(simpleSeek { p ->
