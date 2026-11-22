@@ -62,6 +62,7 @@ class DownloadActivity : Activity() {
                 "Pega el enlace de una página web con un video, o el enlace directo (.mp4, .mkv, .webm… o .m3u8). " +
                     "La app busca los videos de la página y te deja elegir cuál y con qué calidad. " +
                     "Se descarga el archivo original, sin perder calidad. Solo descarga videos que tengas derecho a guardar. " +
+                    "También puedes verlo al momento en tu visor, sin descargarlo. " +
                     "Los videos protegidos (YouTube, plataformas de pago…) no se pueden descargar.",
                 13f, Ui.MUT
             ),
@@ -235,6 +236,7 @@ class DownloadActivity : Activity() {
         i.putExtra("name", opt.fileName)
         i.putExtra("live", true)
         i.putExtra("vr", true)
+        i.putExtra("hls", opt.hls)
         i.putExtra("referer", opt.referer)
         startActivity(i)
     }
