@@ -94,8 +94,11 @@ class PlayerActivity : Activity() {
             finish()
             return
         }
+        DiagLog.install(this)
         uriString = uri.toString()
         name = intent.getStringExtra("name") ?: displayName(uri)
+        DiagLog.setLastVideo(this, uriString, name)
+        DiagLog.add(this, "ABRIR", "«" + name + "» " + uri.scheme + "://" + uri.authority)
         live = intent.getBooleanExtra("live", false)
         if (!live) Library.touch(this, uriString, name)
 
@@ -157,8 +160,11 @@ class PlayerActivity : Activity() {
             }
 
             override fun onPlayerError(error: PlaybackException) {
-                Toast.makeText(this@PlayerActivity, "No se pudo reproducir: " + error.errorCodeName, Toast.LENGTH_LONG).show()
+                val detail = error.errorCodeName + " (" + error.errorCode + ")\n" + (error.message ?: "") +
+                    (error.cause?.let { "\nCausa: " + it.javaClass.simpleName + ": " + it.message } ?: "")
+                DiagLog.add(this@PlayerActivity, "ERROR DE REPRODUCCIÓN", detail + "\n" + DiagLog.stack(error))
                 showOverlay(true)
+                showErrorDialog(error, detail)
             }
         })
 
@@ -175,6 +181,35 @@ class PlayerActivity : Activity() {
 
         if (renderer.viewMode == StereoRenderer.MODE_VR && !ht.available) {
             Toast.makeText(this, "Tu móvil no tiene giroscopio: el modo VR no podrá seguir tu cabeza.", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun errorHint(error: PlaybackException): String {
+        val n = error.errorCodeName
+        return when {
+            n.contains("NO_PERMISSION") || n.contains("FILE_NOT_FOUND") ->
+                "Android ya no deja abrir ese archivo. Vuelve al inicio y ábrelo otra vez con «Abrir video 3D»."
+            n.contains("DECODING_FORMAT_EXCEEDS") || n.contains("DECODER_INIT") || n.contains("DECODING_FAILED") || n.contains("DECODER_QUERY") ->
+                "Tu móvil no puede decodificar este video (formato o resolución demasiado exigentes, por ejemplo HEVC/4K de 10 bits). Prueba con una versión más ligera."
+            n.contains("PARSING") ->
+                "El archivo está dañado o su formato no se reconoce."
+            n.contains("IO_") ->
+                "No se pudo leer el archivo. Comprueba que sigue en el móvil y que hay espacio libre."
+            else -> "Pulsa «Enviar informe» para ver el detalle."
+        }
+    }
+
+    private fun showErrorDialog(error: PlaybackException, detail: String) {
+        if (isFinishing) return
+        try {
+            android.app.AlertDialog.Builder(this)
+                .setTitle("No se pudo reproducir")
+                .setMessage(errorHint(error) + "\n\n" + detail.take(700))
+                .setPositiveButton("Enviar informe") { _, _ -> DiagLog.share(this, "Error al reproducir «" + name + "»:\n" + detail) }
+                .setNegativeButton("Cerrar", null)
+                .show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "No se pudo reproducir: " + error.errorCodeName, Toast.LENGTH_LONG).show()
         }
     }
 

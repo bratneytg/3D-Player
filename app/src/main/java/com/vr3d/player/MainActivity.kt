@@ -3,6 +3,7 @@ package com.vr3d.player
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
+import android.graphics.Color
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.view.Gravity
@@ -18,6 +19,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        DiagLog.install(this)
         val scroll = ScrollView(this)
         scroll.setBackgroundColor(Ui.BG)
         val col = LinearLayout(this)
@@ -65,6 +67,14 @@ class MainActivity : Activity() {
         list = LinearLayout(this)
         list.orientation = LinearLayout.VERTICAL
         col.addView(list, Ui.lp(-1, -2))
+
+        // Botón pequeño y apartado: genera un informe de errores para enviarlo.
+        val rep = Ui.text(this, "🐞 Generar informe de errores", 12f, Ui.MUT)
+        rep.gravity = Gravity.CENTER
+        rep.setPadding(Ui.dp(this, 12), Ui.dp(this, 8), Ui.dp(this, 12), Ui.dp(this, 8))
+        rep.background = Ui.rounded(this, Color.TRANSPARENT, 10, Ui.LINE)
+        rep.setOnClickListener { DiagLog.share(this) }
+        col.addView(rep, Ui.lp(-2, -2, top = Ui.dp(this, 60), bottom = Ui.dp(this, 10)).also { it.gravity = Gravity.CENTER_HORIZONTAL })
 
         setContentView(scroll)
     }

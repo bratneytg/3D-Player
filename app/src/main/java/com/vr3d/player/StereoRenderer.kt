@@ -257,6 +257,13 @@ void main() {
     }
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
+        try {
+            val mt = IntArray(1)
+            GLES20.glGetIntegerv(GLES20.GL_MAX_TEXTURE_SIZE, mt, 0)
+            DiagLog.glInfo = GLES20.glGetString(GLES20.GL_RENDERER) + " · " + GLES20.glGetString(GLES20.GL_VERSION) + " · textura máx " + mt[0]
+        } catch (e: Exception) {
+            // solo informativo
+        }
         program = buildProgram()
         aPos = GLES20.glGetAttribLocation(program, "aPos")
         uTexMat = GLES20.glGetUniformLocation(program, "uTexMat")
