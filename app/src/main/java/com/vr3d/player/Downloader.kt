@@ -20,7 +20,9 @@ class DlOption(
     val hls: Boolean,
     val fileName: String,
     val sizeBytes: Long,
-    val referer: String? = null
+    val referer: String? = null,
+    /** Dirección que se analizó (lista maestra .m3u8 o archivo); sirve para ver el video en directo. */
+    val sourceUrl: String? = null
 )
 
 class DlAnalysis(val options: List<DlOption>, val note: String)
@@ -129,7 +131,7 @@ class VideoDownloader(private val ctx: Context) {
                 else -> "mp4"
             }
             val sizeTxt = if (len > 0) " · " + fmtSize(len) else ""
-            val opt = DlOption("Original, sin pérdida de calidad" + sizeTxt, url, null, false, "$baseName.$fileExt", len, referer)
+            val opt = DlOption("Original, sin pérdida de calidad" + sizeTxt, url, null, false, "$baseName.$fileExt", len, referer, url)
             return DlAnalysis(listOf(opt), "Es un archivo de video directo: solo hay una calidad (la original). Se descarga tal cual, sin recomprimir.")
         } finally {
             conn.disconnect()
@@ -167,7 +169,7 @@ class VideoDownloader(private val ctx: Context) {
                 val a = analyzeUrl(u, false)
                 n++
                 for (o in a.options) {
-                    all.add(DlOption("Video " + n + " · " + o.label, o.url, o.audioUrl, o.hls, o.fileName, o.sizeBytes, pageUrl))
+                    all.add(DlOption("Video " + n + " · " + o.label, o.url, o.audioUrl, o.hls, o.fileName, o.sizeBytes, pageUrl, o.sourceUrl))
                 }
             } catch (e: Exception) {
                 // este enlace no era un video descargable; se ignora
@@ -187,7 +189,7 @@ class VideoDownloader(private val ctx: Context) {
         if (!HlsParser.isMaster(text)) {
             val m = HlsParser.parseMedia(text, url)
             checkMedia(m)
-            val opt = DlOption("Única calidad disponible" + durTxt(m.durationSec), url, null, true, "$baseName.mp4", 0L, referer)
+            val opt = DlOption("Única calidad disponible" + durTxt(m.durationSec), url, null, true, "$baseName.mp4", 0L, referer, url)
             return DlAnalysis(listOf(opt), "Stream HLS: se descargan todos los trozos y se unen en un solo archivo.")
         }
         val master = HlsParser.parseMaster(text, url)
@@ -198,7 +200,7 @@ class VideoDownloader(private val ctx: Context) {
             val rate = String.format("%.1f Mbps", v.bandwidth / 1_000_000.0)
             val tag = if (idx == 0) " · la mejor" else ""
             val audio = v.audioGroup?.let { master.audioGroups[it] }
-            list.add(DlOption(res + " · " + rate + tag, v.url, audio, true, baseName + "_" + (if (v.height > 0) v.height.toString() + "p" else "q" + (idx + 1)) + ".mp4", 0L, referer))
+            list.add(DlOption(res + " · " + rate + tag, v.url, audio, true, baseName + "_" + (if (v.height > 0) v.height.toString() + "p" else "q" + (idx + 1)) + ".mp4", 0L, referer, url))
         }
         return DlAnalysis(list, "Stream HLS con " + list.size + " calidades. Elige una; las más bajas ocupan menos espacio y datos.")
     }

@@ -29,7 +29,9 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
+import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 
 /** Reproductor 3D: abre cualquier video (sin internet) y lo muestra en VR, rojo/cian o 2D. */
 class PlayerActivity : Activity() {
@@ -57,6 +59,7 @@ class PlayerActivity : Activity() {
     private var vw = 0
     private var vh = 0
     private var layoutPref = Layout.AUTO
+    private var live = false
     private var seeking = false
     private var overlayVisible = true
     private val modeNames = arrayOf("VR · Cardboard", "Rojo / cian", "2D")
@@ -90,7 +93,8 @@ class PlayerActivity : Activity() {
         }
         uriString = uri.toString()
         name = intent.getStringExtra("name") ?: displayName(uri)
-        Library.touch(this, uriString, name)
+        live = intent.getBooleanExtra("live", false)
+        if (!live) Library.touch(this, uriString, name)
 
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         if (Build.VERSION.SDK_INT >= 28) {
@@ -113,8 +117,18 @@ class PlayerActivity : Activity() {
         renderer.headTracker = if (ht.available) ht else null
         renderer.onGaze = { id, frac -> runOnUiThread { handleGaze(id, frac) } }
         layoutPref = Layout.values()[prefs.getInt("layout", 0).coerceIn(0, Layout.values().size - 1)]
+        if (live) {
+            // Video de internet en directo: es 2D normal, se muestra igual en los dos ojos sobre la pantalla virtual.
+            layoutPref = Layout.MONO
+            if (intent.getBooleanExtra("vr", false)) renderer.viewMode = StereoRenderer.MODE_VR
+        }
 
+        val http = DefaultHttpDataSource.Factory()
+            .setUserAgent("Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Mobile Safari/537.36")
+            .setAllowCrossProtocolRedirects(true)
+        intent.getStringExtra("referer")?.let { http.setDefaultRequestProperties(mapOf("Referer" to it)) }
         player = ExoPlayer.Builder(this)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(http))
             .setAudioAttributes(AudioAttributes.DEFAULT, true)
             .setHandleAudioBecomingNoisy(true)
             .build()

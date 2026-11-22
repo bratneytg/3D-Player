@@ -29,6 +29,7 @@ class DownloadActivity : Activity() {
     private lateinit var optionsBox: LinearLayout
     private lateinit var btnAnalyze: Button
     private lateinit var btnDownload: Button
+    private lateinit var btnLive: Button
     private lateinit var btnCancel: Button
     private lateinit var btnPlay: Button
     private lateinit var btnConvert: Button
@@ -99,6 +100,10 @@ class DownloadActivity : Activity() {
         btnDownload = Ui.button(this, "Descargar", true) { startDownload() }
         btnDownload.visibility = View.GONE
         card.addView(btnDownload, Ui.lp(-1, -2, top = Ui.dp(this, 12)))
+
+        btnLive = Ui.button(this, "👓  Ver ahora sin descargar (modo VR)", false) { startLive() }
+        btnLive.visibility = View.GONE
+        card.addView(btnLive, Ui.lp(-1, -2, top = Ui.dp(this, 10)))
         col.addView(card, Ui.lp(-1, -2))
 
         progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal)
@@ -167,6 +172,7 @@ class DownloadActivity : Activity() {
         analyzing = true
         btnAnalyze.isEnabled = false
         btnDownload.visibility = View.GONE
+        btnLive.visibility = View.GONE
         optionsBox.removeAllViews()
         optionButtons.clear()
         tvInfo.setTextColor(Ui.MUT)
@@ -207,6 +213,7 @@ class DownloadActivity : Activity() {
         refreshOptionButtons()
         btnDownload.visibility = View.VISIBLE
         btnDownload.isEnabled = !running
+        btnLive.visibility = View.VISIBLE
     }
 
     private fun refreshOptionButtons() {
@@ -215,6 +222,21 @@ class DownloadActivity : Activity() {
             b.text = (if (i == selected) "●  " else "○  ") + o.label
             b.alpha = if (i == selected) 1f else 0.65f
         }
+    }
+
+    /** Reproduce el video en streaming, sin guardarlo ni convertirlo: pantalla 2D adaptada al visor Cardboard. */
+    private fun startLive() {
+        if (options.isEmpty()) return
+        val opt = options[selected]
+        // Si el audio va aparte, se usa la lista maestra para que el reproductor junte audio y video.
+        val url = if (opt.hls && opt.audioUrl != null) (opt.sourceUrl ?: opt.url) else opt.url
+        val i = Intent(this, PlayerActivity::class.java)
+        i.data = android.net.Uri.parse(url)
+        i.putExtra("name", opt.fileName)
+        i.putExtra("live", true)
+        i.putExtra("vr", true)
+        i.putExtra("referer", opt.referer)
+        startActivity(i)
     }
 
     private fun startDownload() {
