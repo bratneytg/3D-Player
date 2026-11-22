@@ -40,7 +40,7 @@ class MainActivity : Activity() {
         val titles = LinearLayout(this)
         titles.orientation = LinearLayout.VERTICAL
         titles.addView(Ui.text(this, "VR3D Player", 20f, Ui.TXT, true))
-        titles.addView(Ui.text(this, "Reproductor 3D / VR sin conexión", 12f, Ui.MUT))
+        titles.addView(Ui.text(this, "Reproductor 3D / VR · funciona sin conexión", 12f, Ui.MUT))
         header.addView(titles, Ui.lp(-2, -2, left = Ui.dp(this, 12)))
         col.addView(header, Ui.lp(-1, -2, bottom = Ui.dp(this, 20)))
 
@@ -48,6 +48,12 @@ class MainActivity : Activity() {
         col.addView(
             Ui.button(this, "✨  Convertir video 2D → 3D con IA", false) {
                 startActivity(Intent(this, ConvertActivity::class.java))
+            },
+            Ui.lp(-1, -2, bottom = Ui.dp(this, 10))
+        )
+        col.addView(
+            Ui.button(this, "⬇️  Descargar video de internet", false) {
+                startActivity(Intent(this, DownloadActivity::class.java))
             },
             Ui.lp(-1, -2)
         )

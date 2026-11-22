@@ -133,6 +133,13 @@ class ConvertActivity : Activity() {
 
         setContentView(scroll)
         refreshTexts()
+        intent.data?.let { u ->
+            picked = u
+            pickedName = intent.getStringExtra("name") ?: queryName(u)
+            tvPicked.text = pickedName
+            tvPicked.setTextColor(Ui.TXT)
+            btnStart.isEnabled = true
+        }
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 31)
         }

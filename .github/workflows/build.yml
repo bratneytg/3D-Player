@@ -27,6 +27,9 @@ jobs:
           ls -l app/src/main/assets
           test "$(stat -c%s app/src/main/assets/depth_model.onnx)" -gt 20000000
 
+      - name: Pruebas unitarias
+        run: gradle testDebugUnitTest --no-daemon --stacktrace
+
       - name: Compilar APK
         run: gradle assembleDebug --no-daemon --stacktrace
 
