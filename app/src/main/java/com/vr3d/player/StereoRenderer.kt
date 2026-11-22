@@ -93,6 +93,10 @@ uniform vec2 uTan;
 uniform vec2 uK;
 uniform vec2 uScr;
 uniform vec4 uPan;
+uniform vec2 uMenu;
+uniform float uShowMenu;
+uniform vec2 uAspect;
+uniform float uPointer;
 uniform float uShift;
 
 vec3 video(vec2 p) {
@@ -115,10 +119,25 @@ void main() {
     if (abs(p.x) <= 1.0 && abs(p.y) <= 1.0) {
       col = video(vec2(p.x + uShift, p.y));
     }
-    vec2 pp = (s - uPan.xy) / uPan.zw;
-    if (abs(pp.x) <= 1.0 && abs(pp.y) <= 1.0) {
-      vec4 c = texture2D(uPanel, vec2(pp.x * 0.5 + 0.5, 0.5 - pp.y * 0.5));
-      col = c.rgb + (1.0 - c.a) * col;
+  }
+  if (uShowMenu > 0.5) {
+    // el menú vive en un marco que solo gira en horizontal hasta donde estabas mirando al bajar la vista
+    vec3 rm = vec3(ray.x * uMenu.x + ray.z * uMenu.y, ray.y, -ray.x * uMenu.y + ray.z * uMenu.x);
+    if (rm.z < -0.0001) {
+      vec2 s2 = rm.xy / (-rm.z);
+      vec2 pp = (s2 - uPan.xy) / uPan.zw;
+      if (abs(pp.x) <= 1.0 && abs(pp.y) <= 1.0) {
+        vec4 c = texture2D(uPanel, vec2(pp.x * 0.5 + 0.5, 0.5 - pp.y * 0.5));
+        col = c.rgb + (1.0 - c.a) * col;
+      }
+    }
+  }
+  if (uPointer > 0.5) {
+    float rr = length(vPos * uAspect);
+    if (rr < 0.012) {
+      col = vec3(0.13, 0.83, 0.93);
+    } else if (rr < 0.018) {
+      col = vec3(1.0);
     }
   }
   gl_FragColor = vec4(col, 1.0);
@@ -164,6 +183,10 @@ void main() {
     private var sK = 0
     private var sScr = 0
     private var sPan = 0
+    private var sMenu = 0
+    private var sShowMenu = 0
+    private var sAspect = 0
+    private var sPointer = 0
     private var sShift = 0
     private var panelTex = 0
     private val rawM = FloatArray(16)
@@ -184,6 +207,8 @@ void main() {
     private var lastDrawNs = 0L
     private var menuOpen = false
     private var menuActivity = 0L
+    private var menuYaw = 0f
+    private var menuVisible = false
 
     private var program = 0
     private var texId = 0
@@ -237,6 +262,10 @@ void main() {
         sK = GLES20.glGetUniformLocation(sceneProgram, "uK")
         sScr = GLES20.glGetUniformLocation(sceneProgram, "uScr")
         sPan = GLES20.glGetUniformLocation(sceneProgram, "uPan")
+        sMenu = GLES20.glGetUniformLocation(sceneProgram, "uMenu")
+        sShowMenu = GLES20.glGetUniformLocation(sceneProgram, "uShowMenu")
+        sAspect = GLES20.glGetUniformLocation(sceneProgram, "uAspect")
+        sPointer = GLES20.glGetUniformLocation(sceneProgram, "uPointer")
         sShift = GLES20.glGetUniformLocation(sceneProgram, "uShift")
 
         val pt = IntArray(1)
@@ -337,6 +366,7 @@ void main() {
             if (Math.hypot(fx.toDouble(), fy.toDouble()) > 0.2) {
                 yaw0 = Math.atan2(fx.toDouble(), fy.toDouble()).toFloat()
                 recenterRequested = false
+                menuOpen = false // el menú está en el marco anterior; se cierra al centrar
             }
         }
 
@@ -380,6 +410,9 @@ void main() {
 
         GLES20.glUniform2f(sScr, hw, hh)
         GLES20.glUniform4f(sPan, PANEL[0], PANEL[1], PANEL[2], PANEL[3])
+        GLES20.glUniform2f(sMenu, Math.cos(menuYaw.toDouble()).toFloat(), Math.sin(menuYaw.toDouble()).toFloat())
+        GLES20.glUniform1f(sShowMenu, if (menuVisible) 1f else 0f)
+        GLES20.glUniform1f(sPointer, if (menuOpen) 1f else 0f)
         GLES20.glUniform2f(sK, 0.12f * lensK, 0.06f * lensK)
 
         for (eye in 0..1) {
@@ -390,6 +423,7 @@ void main() {
             GLES20.glViewport(x, 0, w, viewH)
             GLES20.glUniform4f(sRect, r[0], r[1], r[2], r[3])
             GLES20.glUniform2f(sTan, TAN_V * va, TAN_V)
+            GLES20.glUniform2f(sAspect, va, 1f)
             GLES20.glUniform1f(sShift, if (eye == 0) separation else -separation)
             GLES20.glEnableVertexAttribArray(sAPos)
             quad.position(0)
@@ -406,9 +440,19 @@ void main() {
         val rz = -rot[8]
         var hit = GazePanel.NONE
         var u = 0f
-        if (rz < -0.0001f) {
-            val sx = rx / -rz
-            val sy = ry / -rz
+
+        // El menú aparece al bajar la vista, justo debajo de hacia donde mirabas (no depende de dónde esté el video).
+        if (ry > -0.25f && !menuOpen) {
+            menuYaw = Math.atan2(rx.toDouble(), (-rz).toDouble()).toFloat()
+        }
+        menuVisible = menuOpen || ry < -0.30f
+        val cs = Math.cos(menuYaw.toDouble()).toFloat()
+        val sn = Math.sin(menuYaw.toDouble()).toFloat()
+        val mx = rx * cs + rz * sn
+        val mz = -rx * sn + rz * cs
+        if (menuVisible && mz < -0.0001f) {
+            val sx = mx / -mz
+            val sy = ry / -mz
             val px = (sx - PANEL[0]) / PANEL[2]
             val py = (sy - PANEL[1]) / PANEL[3]
             if (Math.abs(px) <= 1f && Math.abs(py) <= 1f) {

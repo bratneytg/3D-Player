@@ -358,8 +358,8 @@ class PlayerActivity : Activity() {
 
         val hint = Ui.text(
             this,
-            "En modo VR mira hacia abajo hasta el botón «Menú» y mantén la mirada fija para abrirlo; " +
-                "lo mismo para cada control (se rellena una barrita). Se cierra solo a los 5 s o con ✕. " +
+            "En modo VR baja la vista (mirando hacia abajo, hacia donde sea) y aparece el botón «Menú»; mantén la mirada fija para abrirlo. " +
+                "Con el menú abierto verás un punto para apuntar; lo mismo para cada control (se rellena una barrita). Se cierra solo a los 5 s o con ✕. " +
                 "Tocar la pantalla (o el botón del visor) pausa o reanuda. Mantén pulsado para ver este menú.",
             12f, Ui.MUT
         )
