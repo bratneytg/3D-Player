@@ -1,14 +1,14 @@
 package com.vr3d.player
 
 import android.app.Activity
-import android.content.ContentValues
 import android.content.Intent
 import android.net.Uri
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import android.os.Environment
-import android.os.PowerManager
-import android.provider.MediaStore
+import android.os.Handler
+import android.os.Looper
 import android.provider.OpenableColumns
 import android.view.Gravity
 import android.view.WindowManager
@@ -18,7 +18,6 @@ import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
-import java.io.File
 
 /** Convierte un video 2D normal en 3D (lado a lado) con IA, dentro del propio móvil. */
 class ConvertActivity : Activity() {
@@ -37,7 +36,9 @@ class ConvertActivity : Activity() {
     private var pickedName = "video"
     private var highQuality = false
     private var running = false
-    private var converter: VideoConverter? = null
+    private val handler = Handler(Looper.getMainLooper())
+    private var seenFinished = ConvertState.finishedCount
+    private var startedAt = 0L
     private var resultUri: Uri? = null
     private var resultName = ""
 
@@ -102,7 +103,7 @@ class ConvertActivity : Activity() {
         tvStatus.gravity = Gravity.START
         col.addView(tvStatus, Ui.lp(-1, -2, top = Ui.dp(this, 8)))
 
-        btnCancel = Ui.button(this, "Cancelar", false) { converter?.cancelled = true }
+        btnCancel = Ui.button(this, "Cancelar", false) { ConvertService.cancel(this) }
         btnCancel.visibility = android.view.View.GONE
         col.addView(btnCancel, Ui.lp(-1, -2, top = Ui.dp(this, 10)))
 
@@ -121,7 +122,8 @@ class ConvertActivity : Activity() {
         col.addView(
             Ui.text(
                 this,
-                "Consejos: deja la pantalla encendida y la app abierta mientras convierte. " +
+                "La conversión sigue en segundo plano: puedes apagar la pantalla o usar otras apps " +
+                    "(verás el progreso en la notificación). " +
                     "Rápido (480p) es lo más ágil; Normal (720p) tarda varias veces más. " +
                     "Se usa mucha batería: conviene tener el móvil cargando.",
                 12f, Ui.MUT
@@ -131,6 +133,9 @@ class ConvertActivity : Activity() {
 
         setContentView(scroll)
         refreshTexts()
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 31)
+        }
     }
 
     private fun strength(): Float = 0.4f + seekStrength.progress * 0.1f
@@ -155,6 +160,11 @@ class ConvertActivity : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == 21 && resultCode == RESULT_OK) {
             val u = data?.data ?: return
+            try {
+                contentResolver.takePersistableUriPermission(u, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (e: Exception) {
+                // no todos los proveedores lo permiten; el servicio recibe además un permiso temporal
+            }
             picked = u
             pickedName = queryName(u)
             tvPicked.text = pickedName
@@ -187,60 +197,25 @@ class ConvertActivity : Activity() {
 
     private fun start() {
         val uri = picked ?: return
-        if (running) return
+        if (ConvertState.running) return
+        ConvertService.start(this, uri, pickedName, strength(), highQuality)
+        // El estado real lo marca el servicio; mientras arranca se muestra "Preparando…".
+        seenFinished = ConvertState.finishedCount
+        startedAt = System.currentTimeMillis()
+        progress.progress = 0
+        setProgress(0f, "Preparando…")
+        showRunning()
+        handler.removeCallbacks(poll)
+        handler.post(poll)
+    }
+
+    private fun showRunning() {
         running = true
         btnStart.isEnabled = false
         btnPlay.visibility = android.view.View.GONE
         btnCancel.visibility = android.view.View.VISIBLE
         progress.visibility = android.view.View.VISIBLE
-        progress.progress = 0
-        setProgress(0f, "Preparando…")
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-
-        val conv = VideoConverter(this)
-        converter = conv
-        val s = strength()
-        val hq = highQuality
-        val stem = pickedName.substringBeforeLast('.', pickedName).replace(Regex("[^\\w\\- ]"), "").trim().ifEmpty { "video" }
-        val pm = getSystemService(POWER_SERVICE) as PowerManager
-        val wl = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "vr3d:convert")
-        wl.acquire(6 * 60 * 60 * 1000L)
-
-        Thread {
-            val tmp = File(cacheDir, "convert_" + System.currentTimeMillis() + ".mp4")
-            try {
-                val res = conv.convert(uri, tmp, s, hq) { f, m -> runOnUiThread { setProgress(f, m) } }
-                val finalName = stem + "_3D_LR.mp4"
-                val outUri = saveToMovies(tmp, finalName)
-                Library.touch(this, outUri.toString(), finalName)
-                runOnUiThread {
-                    resultUri = outUri
-                    resultName = finalName
-                    progress.progress = 1000
-                    tvStatus.setTextColor(Ui.TXT)
-                    tvStatus.text = "¡Listo! Guardado como " + finalName + "\n" +
-                        res.width + "×" + res.height + " · " + String.format("%.0f", res.seconds) + " s" +
-                        (if (res.audio) "" else " · sin audio (el original no era AAC)")
-                    btnPlay.visibility = android.view.View.VISIBLE
-                    finishUi()
-                }
-            } catch (e: Cancelled) {
-                runOnUiThread {
-                    tvStatus.text = "Cancelado"
-                    finishUi()
-                }
-            } catch (e: Throwable) {
-                val msg = (e.message ?: e.javaClass.simpleName)
-                runOnUiThread {
-                    tvStatus.setTextColor(Ui.ERR)
-                    tvStatus.text = "Error: " + msg
-                    finishUi()
-                }
-            } finally {
-                tmp.delete()
-                if (wl.isHeld) wl.release()
-            }
-        }.start()
     }
 
     private fun finishUi() {
@@ -250,33 +225,69 @@ class ConvertActivity : Activity() {
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
-    private fun saveToMovies(file: File, displayName: String): Uri {
-        if (Build.VERSION.SDK_INT < 29) {
-            // Android 9 o anterior: se guarda en la carpeta de la app (no hace falta permiso)
-            val base = getExternalFilesDir(Environment.DIRECTORY_MOVIES) ?: filesDir
-            val dir = File(base, "VR3D")
-            dir.mkdirs()
-            val dest = File(dir, displayName)
-            file.inputStream().use { input -> dest.outputStream().use { out -> input.copyTo(out) } }
-            return Uri.fromFile(dest)
+    /** Lee el estado del servicio y lo muestra. */
+    private fun refreshFromState() {
+        if (ConvertState.running) {
+            if (!running) showRunning()
+            setProgress(ConvertState.progress, ConvertState.message)
+            tvPicked.text = ConvertState.sourceName
+            return
         }
-        val values = ContentValues()
-        values.put(MediaStore.Video.Media.DISPLAY_NAME, displayName)
-        values.put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
-        values.put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/VR3D")
-        values.put(MediaStore.Video.Media.IS_PENDING, 1)
-        val uri = contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
-            ?: throw IllegalStateException("No se pudo crear el archivo en Películas")
-        val os = contentResolver.openOutputStream(uri) ?: throw IllegalStateException("No se pudo escribir el archivo")
-        os.use { out -> file.inputStream().use { it.copyTo(out) } }
-        val done = ContentValues()
-        done.put(MediaStore.Video.Media.IS_PENDING, 0)
-        contentResolver.update(uri, done, null, null)
-        return uri
+        if (running && ConvertState.finishedCount == seenFinished &&
+            System.currentTimeMillis() - startedAt > 10_000L
+        ) {
+            // El servicio no llegó a arrancar
+            finishUi()
+            tvStatus.setTextColor(Ui.ERR)
+            tvStatus.text = "No se pudo iniciar la conversión en segundo plano."
+            return
+        }
+        if (running && ConvertState.finishedCount != seenFinished) {
+            seenFinished = ConvertState.finishedCount
+            // Acaba de terminar
+            finishUi()
+            val err = ConvertState.error
+            val res = ConvertState.resultUri
+            if (err != null) {
+                tvStatus.setTextColor(Ui.ERR)
+                tvStatus.text = "Error: " + err
+            } else if (res != null) {
+                resultUri = res
+                resultName = ConvertState.resultName
+                progress.progress = 1000
+                tvStatus.setTextColor(Ui.TXT)
+                tvStatus.text = ConvertState.summary
+                btnPlay.visibility = android.view.View.VISIBLE
+            } else {
+                tvStatus.setTextColor(Ui.TXT)
+                tvStatus.text = "Cancelado"
+            }
+        }
     }
 
-    override fun onDestroy() {
-        converter?.cancelled = true
-        super.onDestroy()
+    private val poll = object : Runnable {
+        override fun run() {
+            refreshFromState()
+            if (running || ConvertState.running) handler.postDelayed(this, 400)
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Si había una conversión en marcha (o terminó mientras estabas fuera), se recupera el estado.
+        if (ConvertState.running) {
+            showRunning()
+            refreshFromState()
+            handler.removeCallbacks(poll)
+            handler.post(poll)
+        } else if (ConvertState.finishedCount != seenFinished) {
+            running = true
+            refreshFromState()
+        }
+    }
+
+    override fun onPause() {
+        handler.removeCallbacks(poll)
+        super.onPause()
     }
 }

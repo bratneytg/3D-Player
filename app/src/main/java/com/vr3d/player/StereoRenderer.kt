@@ -4,6 +4,7 @@ import android.graphics.SurfaceTexture
 import android.opengl.GLES11Ext
 import android.opengl.GLES20
 import android.opengl.GLSurfaceView
+import android.opengl.GLUtils
 import android.opengl.Matrix
 import android.view.Surface
 import java.nio.ByteBuffer
@@ -77,6 +78,79 @@ void main() {
 """
         // Fuerza de la corrección de lente para cada nivel (0 = apagada)
         val LENS_LEVELS = floatArrayOf(0f, 0.6f, 1f, 1.6f)
+
+        // Pantalla de cine virtual fija en el espacio + panel de controles + retícula de mirada.
+        private const val FS_SCENE = """
+#extension GL_OES_EGL_image_external : require
+precision highp float;
+varying vec2 vPos;
+uniform samplerExternalOES uTex;
+uniform sampler2D uPanel;
+uniform mat4 uTexMat;
+uniform vec4 uRect;
+uniform mat3 uRot;
+uniform vec2 uTan;
+uniform vec2 uK;
+uniform vec2 uScr;
+uniform vec4 uPan;
+uniform vec2 uAspect;
+uniform float uShift;
+uniform float uDwell;
+uniform float uHover;
+
+vec3 video(vec2 p) {
+  vec2 uv = vec2(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
+  uv = clamp(uv, 0.0, 1.0);
+  vec2 vu = uRect.xy + uv * uRect.zw;
+  vec2 t = (uTexMat * vec4(vu.x, 1.0 - vu.y, 0.0, 1.0)).xy;
+  return texture2D(uTex, t).rgb;
+}
+
+void main() {
+  vec2 q = vPos;
+  float r2 = dot(q, q);
+  vec2 d = q * (1.0 + uK.x * r2 + uK.y * r2 * r2);
+  vec3 ray = uRot * vec3(d * uTan, -1.0);
+  vec3 col = vec3(0.015, 0.015, 0.03);
+  if (ray.z < -0.0001) {
+    vec2 s = ray.xy / (-ray.z);
+    vec2 p = s / uScr;
+    if (abs(p.x) <= 1.0 && abs(p.y) <= 1.0) {
+      col = video(vec2(p.x + uShift, p.y));
+    }
+    vec2 pp = (s - uPan.xy) / uPan.zw;
+    if (abs(pp.x) <= 1.0 && abs(pp.y) <= 1.0) {
+      vec4 c = texture2D(uPanel, vec2(pp.x * 0.5 + 0.5, 0.5 - pp.y * 0.5));
+      col = c.rgb + (1.0 - c.a) * col;
+    }
+  }
+  // retícula en el centro de cada ojo
+  vec2 rp = vPos * uAspect;
+  float rr = length(rp);
+  float outer = 0.040 + 0.010 * uHover;
+  float inner = outer - 0.010;
+  if (rr < 0.006) {
+    col = vec3(1.0);
+  } else if (rr < outer && rr > inner) {
+    float ang = atan(rp.x, rp.y);
+    if (ang < 0.0) { ang += 6.2831853; }
+    float fr = ang / 6.2831853;
+    if (uDwell > 0.001 && fr < uDwell) {
+      col = vec3(0.13, 0.83, 0.93);
+    } else {
+      col = mix(col, vec3(1.0), 0.85);
+    }
+  }
+  gl_FragColor = vec4(col, 1.0);
+}
+"""
+        // Geometría de la escena (en unidades de tangente a distancia 1)
+        private const val SCREEN_HALF_W = 0.62f
+        private const val TAN_V = 0.95f
+        private val PANEL = floatArrayOf(0f, -0.74f, 0.62f, 0.155f) // cx, cy, medio ancho, medio alto
+        private const val DWELL_NS = 1_300_000_000L
+        private const val REPEAT_NS = 900_000_000L
+        private const val SEEK_NS = 800_000_000L
     }
 
     @Volatile var viewMode: Int = MODE_VR
@@ -87,6 +161,46 @@ void main() {
     @Volatile var lensLevel: Int = 2
     @Volatile var videoWidth: Int = 0
     @Volatile var videoHeight: Int = 0
+
+    // --- seguimiento de cabeza y controles por mirada (modo VR)
+    @Volatile var headTracker: HeadTracker? = null
+    @Volatile var playing: Boolean = true
+    @Volatile var posMs: Long = 0L
+    @Volatile var durMs: Long = 0L
+    @Volatile var recenterRequested: Boolean = true
+    /** Se llama (desde el hilo de dibujo) cuando una mirada fija activa un control: (botón, fracción 0..1 si es la barra). */
+    @Volatile var onGaze: ((Int, Float) -> Unit)? = null
+
+    private val panel = GazePanel()
+    private var sceneProgram = 0
+    private var sAPos = 0
+    private var sTex = 0
+    private var sPanel = 0
+    private var sTexMat = 0
+    private var sRect = 0
+    private var sRot = 0
+    private var sTan = 0
+    private var sK = 0
+    private var sScr = 0
+    private var sPan = 0
+    private var sAspect = 0
+    private var sShift = 0
+    private var sDwell = 0
+    private var sHover = 0
+    private var panelTex = 0
+    private val rawM = FloatArray(16)
+    private val rot = FloatArray(9)
+    private var yaw0 = 0f
+    private var hoverId = GazePanel.NONE
+    private var hoverU = 0f
+    private var hoverStart = 0L
+    private var armed = true
+    private var lastActivation = 0L
+    private var dwellFrac = 0f
+    private var drawnHover = -1
+    private var drawnPlaying = false
+    private var drawnPosSec = -1L
+    private var drawnU = -100f
 
     private var program = 0
     private var texId = 0
@@ -128,6 +242,32 @@ void main() {
         uK = GLES20.glGetUniformLocation(program, "uK")
         uMode = GLES20.glGetUniformLocation(program, "uMode")
         uTex = GLES20.glGetUniformLocation(program, "uTex")
+
+        sceneProgram = buildProgram(FS_SCENE)
+        sAPos = GLES20.glGetAttribLocation(sceneProgram, "aPos")
+        sTex = GLES20.glGetUniformLocation(sceneProgram, "uTex")
+        sPanel = GLES20.glGetUniformLocation(sceneProgram, "uPanel")
+        sTexMat = GLES20.glGetUniformLocation(sceneProgram, "uTexMat")
+        sRect = GLES20.glGetUniformLocation(sceneProgram, "uRect")
+        sRot = GLES20.glGetUniformLocation(sceneProgram, "uRot")
+        sTan = GLES20.glGetUniformLocation(sceneProgram, "uTan")
+        sK = GLES20.glGetUniformLocation(sceneProgram, "uK")
+        sScr = GLES20.glGetUniformLocation(sceneProgram, "uScr")
+        sPan = GLES20.glGetUniformLocation(sceneProgram, "uPan")
+        sAspect = GLES20.glGetUniformLocation(sceneProgram, "uAspect")
+        sShift = GLES20.glGetUniformLocation(sceneProgram, "uShift")
+        sDwell = GLES20.glGetUniformLocation(sceneProgram, "uDwell")
+        sHover = GLES20.glGetUniformLocation(sceneProgram, "uHover")
+
+        val pt = IntArray(1)
+        GLES20.glGenTextures(1, pt, 0)
+        panelTex = pt[0]
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, panelTex)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+        drawnHover = -1 // fuerza a volver a subir el panel
 
         val tex = IntArray(1)
         GLES20.glGenTextures(1, tex, 0)
@@ -174,6 +314,12 @@ void main() {
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
         if (program == 0 || videoWidth <= 0 || videoHeight <= 0) return
 
+        val tracker = headTracker
+        if (viewMode == MODE_VR && tracker != null && tracker.ready && sceneProgram != 0) {
+            drawScene(tracker)
+            return
+        }
+
         GLES20.glUseProgram(program)
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, texId)
@@ -196,6 +342,147 @@ void main() {
                 drawEye(0, 0, viewW, viewH, rect(lay, leftIdx), rect(lay, rightIdx), sep, -sep, 1, 0f)
             else ->
                 drawEye(0, 0, viewW, viewH, rect(lay, leftIdx), rect(lay, leftIdx), 0f, 0f, 0, 0f)
+        }
+    }
+
+    // ------------------------------------------------------------------ escena VR con seguimiento de cabeza
+
+    private fun drawScene(tracker: HeadTracker) {
+        if (!tracker.copyMatrix(rawM)) return
+
+        // Recentrar: la dirección en la que miras ahora pasa a ser "el frente" de la pantalla.
+        if (recenterRequested) {
+            val fx = -rawM[2]
+            val fy = -rawM[6]
+            if (Math.hypot(fx.toDouble(), fy.toDouble()) > 0.2) {
+                yaw0 = Math.atan2(fx.toDouble(), fy.toDouble()).toFloat()
+                recenterRequested = false
+            }
+        }
+
+        // rot = Ry(yaw0) * G * M  (guardada por columnas para OpenGL). G: este/norte/arriba -> x/y/-z.
+        val c = Math.cos(yaw0.toDouble()).toFloat()
+        val s = Math.sin(yaw0.toDouble()).toFloat()
+        for (col in 0 until 3) {
+            val wx = rawM[col]
+            val wy = rawM[4 + col]
+            val wz = rawM[8 + col]
+            val gx = wx
+            val gy = wz
+            val gz = -wy
+            rot[col * 3] = gx * c + gz * s
+            rot[col * 3 + 1] = gy
+            rot[col * 3 + 2] = -gx * s + gz * c
+        }
+
+        updateGaze()
+
+        GLES20.glViewport(0, 0, viewW, viewH)
+        GLES20.glUseProgram(sceneProgram)
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, texId)
+        GLES20.glUniform1i(sTex, 0)
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, panelTex)
+        GLES20.glUniform1i(sPanel, 1)
+        GLES20.glUniformMatrix4fv(sTexMat, 1, false, texMatrix, 0)
+        GLES20.glUniformMatrix3fv(sRot, 1, false, rot, 0)
+
+        val lay = layout
+        val ea = StereoDetect.eyeAspect(lay, videoWidth, videoHeight)
+        val z = zoom
+        val hw = SCREEN_HALF_W * z
+        val hh = hw / ea
+        val half = viewW / 2
+        val lensK = LENS_LEVELS[lensLevel.coerceIn(0, LENS_LEVELS.size - 1)]
+        val leftIdx = if (swapEyes) 1 else 0
+        val rightIdx = if (swapEyes) 0 else 1
+
+        GLES20.glUniform2f(sScr, hw, hh)
+        GLES20.glUniform4f(sPan, PANEL[0], PANEL[1], PANEL[2], PANEL[3])
+        GLES20.glUniform2f(sK, 0.12f * lensK, 0.06f * lensK)
+        GLES20.glUniform1f(sDwell, dwellFrac)
+        GLES20.glUniform1f(sHover, if (hoverId != GazePanel.NONE) 1f else 0f)
+
+        for (eye in 0..1) {
+            val x = if (eye == 0) 0 else half
+            val w = if (eye == 0) half else viewW - half
+            val r = rect(lay, if (eye == 0) leftIdx else rightIdx)
+            val va = w.toFloat() / viewH.toFloat()
+            GLES20.glViewport(x, 0, w, viewH)
+            GLES20.glUniform4f(sRect, r[0], r[1], r[2], r[3])
+            GLES20.glUniform2f(sTan, TAN_V * va, TAN_V)
+            GLES20.glUniform2f(sAspect, va, 1f)
+            GLES20.glUniform1f(sShift, if (eye == 0) separation else -separation)
+            GLES20.glEnableVertexAttribArray(sAPos)
+            quad.position(0)
+            GLES20.glVertexAttribPointer(sAPos, 2, GLES20.GL_FLOAT, false, 8, quad)
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+        }
+    }
+
+    /** Calcula qué control está mirando el usuario, lleva la cuenta de la mirada fija y sube el panel a la GPU. */
+    private fun updateGaze() {
+        // rayo del centro de la vista en el espacio de la escena = A * (0, 0, -1)
+        val rx = -rot[6]
+        val ry = -rot[7]
+        val rz = -rot[8]
+        var hit = GazePanel.NONE
+        var u = 0f
+        if (rz < -0.0001f) {
+            val sx = rx / -rz
+            val sy = ry / -rz
+            val px = (sx - PANEL[0]) / PANEL[2]
+            val py = (sy - PANEL[1]) / PANEL[3]
+            if (Math.abs(px) <= 1f && Math.abs(py) <= 1f) {
+                u = (px * 0.5f + 0.5f) * GazePanel.W
+                val v = (0.5f - py * 0.5f) * GazePanel.H
+                hit = panel.hit(u, v)
+            }
+        }
+
+        val now = System.nanoTime()
+        if (hit != hoverId) {
+            hoverId = hit
+            hoverStart = now
+            armed = true
+            dwellFrac = 0f
+        }
+        hoverU = u
+        if (hit == GazePanel.NONE) {
+            dwellFrac = 0f
+        } else {
+            val need = if (hit == GazePanel.SEEK) SEEK_NS else DWELL_NS
+            val since = now - maxOf(hoverStart, lastActivation)
+            if (armed) {
+                dwellFrac = (since.toFloat() / need.toFloat()).coerceIn(0f, 1f)
+                if (since >= need) {
+                    lastActivation = now
+                    val repeat = hit == GazePanel.BACK || hit == GazePanel.FWD
+                    armed = repeat
+                    dwellFrac = 0f
+                    val frac = if (hit == GazePanel.SEEK) panel.seekFraction(u) else 0f
+                    onGaze?.invoke(hit, frac)
+                }
+            } else {
+                dwellFrac = 0f
+            }
+        }
+
+        // Volver a dibujar el panel solo cuando algo cambia
+        val posSec = posMs / 1000L
+        val p = playing
+        val changed = hoverId != drawnHover || p != drawnPlaying || posSec != drawnPosSec ||
+            (hoverId == GazePanel.SEEK && Math.abs(hoverU - drawnU) > 6f)
+        if (changed) {
+            panel.draw(hoverId, hoverU, p, posMs, durMs)
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, panelTex)
+            GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, panel.bitmap, 0)
+            drawnHover = hoverId
+            drawnPlaying = p
+            drawnPosSec = posSec
+            drawnU = hoverU
         }
     }
 
@@ -246,9 +533,9 @@ void main() {
         surfaceTexture = null
     }
 
-    private fun buildProgram(): Int {
+    private fun buildProgram(fragment: String = FS): Int {
         val vs = compile(GLES20.GL_VERTEX_SHADER, VS)
-        val fs = compile(GLES20.GL_FRAGMENT_SHADER, FS)
+        val fs = compile(GLES20.GL_FRAGMENT_SHADER, fragment)
         val p = GLES20.glCreateProgram()
         GLES20.glAttachShader(p, vs)
         GLES20.glAttachShader(p, fs)

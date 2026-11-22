@@ -23,6 +23,8 @@ import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -61,6 +63,10 @@ class PlayerActivity : Activity() {
     private val lensNames = arrayOf("apagada", "suave", "normal", "fuerte")
 
     private val prefs by lazy { getSharedPreferences("player", MODE_PRIVATE) }
+    private var tracker: HeadTracker? = null
+    private lateinit var btnBg: Button
+    private var keepBg = true
+    private var serviceOn = false
 
     private val ticker = object : Runnable {
         override fun run() {
@@ -71,7 +77,10 @@ class PlayerActivity : Activity() {
             tvPos.text = Ui.fmtTime(p)
             tvDur.text = Ui.fmtTime(d)
             btnPlay.text = if (player.isPlaying) "⏸" else "▶"
-            handler.postDelayed(this, 400)
+            renderer.playing = player.isPlaying
+            renderer.posMs = p
+            renderer.durMs = if (d > 0) d else 0L
+            handler.postDelayed(this, 300)
         }
     }
     private val autoHide = Runnable { if (player.isPlaying) showOverlay(false) }
@@ -102,10 +111,24 @@ class PlayerActivity : Activity() {
         renderer.separation = prefs.getFloat("sep", 0f)
         renderer.zoom = prefs.getFloat("zoom", 1f)
         renderer.lensLevel = prefs.getInt("lens", 2)
+        keepBg = prefs.getBoolean("bg", true)
+        val ht = HeadTracker(this)
+        tracker = ht
+        renderer.headTracker = if (ht.available) ht else null
+        renderer.onGaze = { id, frac -> runOnUiThread { handleGaze(id, frac) } }
         layoutPref = Layout.values()[prefs.getInt("layout", 0).coerceIn(0, Layout.values().size - 1)]
 
-        player = ExoPlayer.Builder(this).build()
+        player = ExoPlayer.Builder(this)
+            .setAudioAttributes(AudioAttributes.DEFAULT, true)
+            .setHandleAudioBecomingNoisy(true)
+            .build()
+        player.setWakeMode(C.WAKE_MODE_LOCAL)
         player.addListener(object : Player.Listener {
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                renderer.playing = isPlaying
+                if (serviceOn) PlaybackService.start(this@PlayerActivity, name, isPlaying)
+            }
+
             override fun onVideoSizeChanged(videoSize: VideoSize) {
                 vw = videoSize.width
                 vh = videoSize.height
@@ -133,6 +156,35 @@ class PlayerActivity : Activity() {
         if (saved > 3000L) player.seekTo(saved)
         player.prepare()
         player.playWhenReady = true
+
+        PlaybackBridge.toggle = { runOnUiThread { togglePlay() } }
+        PlaybackBridge.close = { runOnUiThread { finish() } }
+        if (keepBg) {
+            PlaybackService.start(this, name, true)
+            serviceOn = true
+        }
+        if (renderer.viewMode == StereoRenderer.MODE_VR && !ht.available) {
+            Toast.makeText(this, "Tu móvil no tiene giroscopio: el modo VR no podrá seguir tu cabeza.", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    /** Un control del panel VR se activó mirándolo fijamente. */
+    private fun handleGaze(id: Int, frac: Float) {
+        when (id) {
+            GazePanel.BACK -> player.seekTo(maxOf(0L, player.currentPosition - 10_000L))
+            GazePanel.FWD -> {
+                val d = player.duration
+                val t = player.currentPosition + 10_000L
+                player.seekTo(if (d > 0) minOf(t, d - 500L) else t)
+            }
+            GazePanel.PLAY -> togglePlay()
+            GazePanel.CENTER -> renderer.recenterRequested = true
+            GazePanel.EXIT -> finish()
+            GazePanel.SEEK -> {
+                val d = player.duration
+                if (d > 0) player.seekTo((d * frac).toLong())
+            }
+        }
     }
 
     private fun displayName(uri: Uri): String {
@@ -280,10 +332,23 @@ class PlayerActivity : Activity() {
             refreshTexts()
             glView.requestRender()
         }
+        btnBg = Ui.button(this, "", false) {
+            keepBg = !keepBg
+            prefs.edit().putBoolean("bg", keepBg).apply()
+            if (keepBg) {
+                PlaybackService.start(this, name, player.isPlaying)
+                serviceOn = true
+            } else {
+                PlaybackService.stop(this)
+                serviceOn = false
+            }
+            refreshTexts()
+        }
         sp.addView(btnMode, Ui.lp(-1, -2, bottom = gap))
         sp.addView(btnFormat, Ui.lp(-1, -2, bottom = gap))
         sp.addView(btnSwap, Ui.lp(-1, -2, bottom = gap))
         sp.addView(btnLens, Ui.lp(-1, -2, bottom = gap))
+        sp.addView(btnBg, Ui.lp(-1, -2, bottom = gap))
 
         lblSep = Ui.text(this, "", 13f, Ui.MUT)
         sp.addView(lblSep)
@@ -317,8 +382,9 @@ class PlayerActivity : Activity() {
 
         val hint = Ui.text(
             this,
-            "En modo VR: toca la pantalla (o el botón del visor) para pausar/reanudar. " +
-                "Mantén pulsado para ver los controles.",
+            "En modo VR mira hacia abajo para ver los controles y mantén la mirada fija sobre uno " +
+                "(el círculo se llena) para activarlo. Tocar la pantalla (o el botón del visor) pausa o reanuda. " +
+                "Mantén pulsado para ver este menú.",
             12f, Ui.MUT
         )
         sp.addView(hint, Ui.lp(-1, -2, top = gap))
@@ -363,11 +429,20 @@ class PlayerActivity : Activity() {
 
     @Suppress("DEPRECATION")
     private fun applyMode() {
-        requestedOrientation = if (renderer.viewMode == StereoRenderer.MODE_VR)
+        val vr = renderer.viewMode == StereoRenderer.MODE_VR
+        requestedOrientation = if (vr)
             ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        val tracked = vr && renderer.headTracker != null
+        glView.renderMode = if (tracked) GLSurfaceView.RENDERMODE_CONTINUOUSLY else GLSurfaceView.RENDERMODE_WHEN_DIRTY
+        if (tracked) {
+            renderer.recenterRequested = true
+            tracker?.start()
+        } else {
+            tracker?.stop()
+        }
         refreshTexts()
         glView.requestRender()
-        showOverlay(true)
+        showOverlay(!vr)
     }
 
     private fun refreshTexts() {
@@ -376,6 +451,7 @@ class PlayerActivity : Activity() {
         btnFormat.text = if (layoutPref == Layout.AUTO) "Formato: Auto (" + eff.label + ")" else "Formato: " + layoutPref.label
         btnSwap.text = "Intercambiar ojos: " + (if (renderer.swapEyes) "sí" else "no")
         btnLens.text = "Corrección de lente: " + lensNames[renderer.lensLevel.coerceIn(0, lensNames.size - 1)]
+        btnBg.text = "Seguir en segundo plano: " + (if (keepBg) "sí" else "no")
         lblSep.text = "Separación de imagen: " + String.format("%+.0f", renderer.separation * 1000f)
         lblZoom.text = "Zoom: " + String.format("%.0f%%", renderer.zoom * 100f)
     }
@@ -413,6 +489,14 @@ class PlayerActivity : Activity() {
         if (!::glView.isInitialized) return
         glView.onResume()
         hideSystemUi()
+        if (renderer.viewMode == StereoRenderer.MODE_VR && renderer.headTracker != null) {
+            renderer.recenterRequested = true
+            tracker?.start()
+        }
+        if (::player.isInitialized) {
+            player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, false).build()
+        }
         handler.post(ticker)
     }
 
@@ -424,16 +508,30 @@ class PlayerActivity : Activity() {
     override fun onPause() {
         handler.removeCallbacks(ticker)
         handler.removeCallbacks(autoHide)
+        tracker?.stop()
         if (::player.isInitialized) {
-            player.pause()
             Library.setPosition(this, uriString, player.currentPosition)
+            if (keepBg) {
+                // La imagen se detiene pero el audio sigue sonando con la pantalla apagada o en otra app.
+                player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                    .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, true).build()
+                player.clearVideoSurface()
+            } else {
+                player.pause()
+            }
         }
         if (::glView.isInitialized) glView.onPause()
         super.onPause()
     }
 
     override fun onDestroy() {
-        if (::player.isInitialized) player.release()
+        PlaybackBridge.toggle = null
+        PlaybackBridge.close = null
+        if (serviceOn) PlaybackService.stop(this)
+        if (::player.isInitialized) {
+            Library.setPosition(this, uriString, player.currentPosition)
+            player.release()
+        }
         if (::renderer.isInitialized) renderer.release()
         super.onDestroy()
     }

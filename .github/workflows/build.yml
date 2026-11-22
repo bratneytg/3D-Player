@@ -30,6 +30,20 @@ jobs:
       - name: Compilar APK
         run: gradle assembleDebug --no-daemon --stacktrace
 
+      - name: Comprobar alineación de 16 kB de las librerías nativas
+        run: |
+          rm -rf /tmp/apkcheck && mkdir /tmp/apkcheck
+          unzip -q app/build/outputs/apk/debug/app-debug.apk 'lib/*' -d /tmp/apkcheck
+          fail=0
+          for f in $(find /tmp/apkcheck -name '*.so'); do
+            al=$(readelf -lW "$f" | awk '$1=="LOAD"{print $NF}' | sort -u | tr '\n' ' ')
+            echo "$(basename $f): LOAD align = $al"
+            for a in $al; do
+              if [ $((a)) -lt 16384 ]; then fail=1; fi
+            done
+          done
+          if [ $fail -eq 1 ]; then echo "AVISO: hay librerías sin alineación de 16 kB"; exit 1; fi
+
       - uses: actions/upload-artifact@v4
         with:
           name: VR3D-Player-apk

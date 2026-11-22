@@ -38,5 +38,5 @@ android {
 
 dependencies {
     implementation("androidx.media3:media3-exoplayer:1.4.1")
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.19.2")
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.22.0")
 }
