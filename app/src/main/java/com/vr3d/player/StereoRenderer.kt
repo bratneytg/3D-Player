@@ -181,6 +181,8 @@ void main() {
     @Volatile var recenterRequested: Boolean = true
     /** Pantalla cóncava (cilindro alrededor del espectador) en lugar de plana. */
     @Volatile var curved: Boolean = true
+    /** Estira la pantalla en vertical (1 = proporción original del video) para que llene más el campo de visión. */
+    @Volatile var heightScale: Float = 1.35f
     /** Se llama (desde el hilo de dibujo) cuando una mirada fija activa un control: (botón, fracción 0..1 si es la barra). */
     @Volatile var onGaze: ((Int, Float) -> Unit)? = null
 
@@ -419,7 +421,7 @@ void main() {
         val ea = StereoDetect.eyeAspect(lay, videoWidth, videoHeight)
         val z = zoom
         val hw = SCREEN_HALF_W * z
-        val hh = hw / ea
+        val hh = hw / ea * heightScale
         val half = viewW / 2
         val lensK = LENS_LEVELS[lensLevel.coerceIn(0, LENS_LEVELS.size - 1)]
         val leftIdx = if (swapEyes) 1 else 0
@@ -427,7 +429,7 @@ void main() {
 
         GLES20.glUniform2f(sScr, hw, hh)
         val thMax = (CURVE_HALF_ANGLE * z).coerceAtMost(2.4f)
-        GLES20.glUniform2f(sCyl, thMax, thMax / ea)
+        GLES20.glUniform2f(sCyl, thMax, thMax / ea * heightScale)
         GLES20.glUniform1f(sCurved, if (curved) 1f else 0f)
         GLES20.glUniform4f(sPan, PANEL[0], PANEL[1], PANEL[2], PANEL[3])
         GLES20.glUniform2f(sMenu, Math.cos(menuYaw.toDouble()).toFloat(), Math.sin(menuYaw.toDouble()).toFloat())

@@ -54,6 +54,7 @@ class PlayerActivity : Activity() {
     private lateinit var btnCurve: Button
     private lateinit var lblSep: TextView
     private lateinit var lblZoom: TextView
+    private lateinit var lblHeight: TextView
 
     private val handler = Handler(Looper.getMainLooper())
     private var uriString = ""
@@ -115,6 +116,7 @@ class PlayerActivity : Activity() {
         renderer.zoom = prefs.getFloat("zoom", 1f)
         renderer.lensLevel = prefs.getInt("lens", 2)
         renderer.curved = prefs.getBoolean("curve", true)
+        renderer.heightScale = prefs.getFloat("hscale", 1.35f)
         val ht = HeadTracker(this)
         tracker = ht
         renderer.headTracker = if (ht.available) ht else null
@@ -382,6 +384,21 @@ class PlayerActivity : Activity() {
         })
         sp.addView(zoomBar, Ui.lp(-1, -2, bottom = gap))
 
+        lblHeight = Ui.text(this, "", 13f, Ui.MUT)
+        sp.addView(lblHeight)
+        val heightBar = SeekBar(this)
+        heightBar.max = 120
+        heightBar.progress = ((renderer.heightScale - 1f) * 100f).toInt().coerceIn(0, 120)
+        heightBar.progressTintList = android.content.res.ColorStateList.valueOf(Ui.ACC)
+        heightBar.thumbTintList = android.content.res.ColorStateList.valueOf(Ui.ACC)
+        heightBar.setOnSeekBarChangeListener(simpleSeek { p ->
+            renderer.heightScale = 1f + p / 100f
+            prefs.edit().putFloat("hscale", renderer.heightScale).apply()
+            refreshTexts()
+            glView.requestRender()
+        })
+        sp.addView(heightBar, Ui.lp(-1, -2, bottom = gap))
+
         val hint = Ui.text(
             this,
             "En modo VR baja la vista (mirando hacia abajo, hacia donde sea) y aparece el botón «Menú»; mantén la mirada fija para abrirlo. " +
@@ -455,6 +472,7 @@ class PlayerActivity : Activity() {
         btnCurve.text = "Pantalla VR: " + (if (renderer.curved) "curva (cóncava)" else "plana")
         btnLens.text = "Corrección de lente: " + lensNames[renderer.lensLevel.coerceIn(0, lensNames.size - 1)]
         lblSep.text = "Convergencia (negativo = imágenes más juntas): " + String.format("%+.0f", renderer.separation * 100f)
+        lblHeight.text = "Altura de la pantalla (VR): " + String.format("%.0f%%", renderer.heightScale * 100f) + " · más alto = más imagen arriba y abajo (se estira)"
         lblZoom.text = "Zoom: " + String.format("%.0f%%", renderer.zoom * 100f)
     }
 
