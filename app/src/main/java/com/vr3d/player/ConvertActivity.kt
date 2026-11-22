@@ -4,7 +4,9 @@ import android.app.Activity
 import android.content.ContentValues
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.PowerManager
 import android.provider.MediaStore
 import android.provider.OpenableColumns
@@ -216,7 +218,7 @@ class ConvertActivity : Activity() {
                     resultName = finalName
                     progress.progress = 1000
                     tvStatus.setTextColor(Ui.TXT)
-                    tvStatus.text = "¡Listo! Guardado en Películas/VR3D como " + finalName + "\n" +
+                    tvStatus.text = "¡Listo! Guardado como " + finalName + "\n" +
                         res.width + "×" + res.height + " · " + String.format("%.0f", res.seconds) + " s" +
                         (if (res.audio) "" else " · sin audio (el original no era AAC)")
                     btnPlay.visibility = android.view.View.VISIBLE
@@ -249,6 +251,15 @@ class ConvertActivity : Activity() {
     }
 
     private fun saveToMovies(file: File, displayName: String): Uri {
+        if (Build.VERSION.SDK_INT < 29) {
+            // Android 9 o anterior: se guarda en la carpeta de la app (no hace falta permiso)
+            val base = getExternalFilesDir(Environment.DIRECTORY_MOVIES) ?: filesDir
+            val dir = File(base, "VR3D")
+            dir.mkdirs()
+            val dest = File(dir, displayName)
+            file.inputStream().use { input -> dest.outputStream().use { out -> input.copyTo(out) } }
+            return Uri.fromFile(dest)
+        }
         val values = ContentValues()
         values.put(MediaStore.Video.Media.DISPLAY_NAME, displayName)
         values.put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
